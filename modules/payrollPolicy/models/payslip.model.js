@@ -1,0 +1,125 @@
+// modules/payrollPolicy/models/payslip.model.js
+// T-29 — Payslip model
+// Generated after each payroll run for each employee
+
+"use strict";
+
+const mongoose = require("mongoose");
+
+const earningsSchema = new mongoose.Schema({
+  basic:            { type: Number, default: 0 },
+  hra:              { type: Number, default: 0 },
+  travelAllowance:  { type: Number, default: 0 },
+  medicalAllowance: { type: Number, default: 0 },
+  specialAllowance: { type: Number, default: 0 },
+  overtime:         { type: Number, default: 0 },
+  bonus:            { type: Number, default: 0 },
+  arrears:          { type: Number, default: 0 },
+
+  // Dynamic custom components — persisted in payslip for audit trail
+  customComponents: [{
+    code:          { type: String },
+    name:          { type: String },
+    amount:        { type: Number, default: 0 },
+    taxable:       { type: Boolean, default: true },
+    pfApplicable:  { type: Boolean, default: false },
+    esiApplicable: { type: Boolean, default: false },
+    _id:           false,
+  }],
+}, { _id: false });
+
+const deductionsSchema = new mongoose.Schema({
+  pf:              { type: Number, default: 0 },
+  esi:             { type: Number, default: 0 },
+  tds:             { type: Number, default: 0 },
+  lop:             { type: Number, default: 0 }, // Loss of Pay deduction
+  professionalTax: { type: Number, default: 0 },
+  advance:         { type: Number, default: 0 },
+  other:           { type: Number, default: 0 },
+}, { _id: false });
+
+const payslipSchema = new mongoose.Schema({
+  // ── Scope ──────────────────────────────────────────────────
+  org_id: {
+    type:     mongoose.Schema.Types.ObjectId,
+    ref:      "Organization",
+    required: true,
+    index:    true,
+  },
+  company_id: {
+    type:     mongoose.Schema.Types.ObjectId,
+    ref:      "Company",
+    required: true,
+    index:    true,
+  },
+  unit_id: {
+    type:  mongoose.Schema.Types.ObjectId,
+    ref:   "Unit",
+    index: true,
+  },
+  employee_id: {
+    type:     mongoose.Schema.Types.ObjectId,
+    ref:      "Employee",
+    required: true,
+    index:    true,
+  },
+
+  // ── Period ─────────────────────────────────────────────────
+  month: { type: Number, required: true, min: 1, max: 12 },
+  year:  { type: Number, required: true },
+
+  // ── Salary components ──────────────────────────────────────
+  earnings:   { type: earningsSchema, default: () => ({}) },
+  deductions: { type: deductionsSchema, default: () => ({}) },
+
+  grossSalary: { type: Number, required: true, min: 0 },
+  grossAfterLOP:  { type: Number, default: 0, min: 0 },       // post-LOP, before tax/PF
+
+  netSalary:   { type: Number, required: true, min: 0 },
+
+  // ── Attendance summary (for LOP) ───────────────────────────
+  totalWorkingDays:  { type: Number, default: 0 },
+  daysPresent:       { type: Number, default: 0 },
+  lopDays:           { type: Number, default: 0 },
+  overtimeHours:     { type: Number, default: 0 },
+
+  // ── Status ─────────────────────────────────────────────────
+  status: {
+    type:    String,
+    enum:    ["DRAFT", "PUBLISHED", "PAID"],
+    default: "DRAFT",
+    index:   true,
+  },
+
+  // ── Payment ────────────────────────────────────────────────
+  paymentDate: { type: Date, default: null },
+  paymentMode: {
+    type:    String,
+    enum:    ["BANK_TRANSFER", "CHEQUE", "CASH", null],
+    default: null,
+  },
+  transactionRef: { type: String, default: null },
+
+  // ── Audit ──────────────────────────────────────────────────
+  generatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  approvedBy:  { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  approvedAt:  { type: Date, default: null },
+  isDeleted:   { type: Boolean, default: false },
+},
+{
+  timestamps: true,
+  toJSON: { virtuals: true },
+});
+
+// ── Indexes ──────────────────────────────────────────────────
+payslipSchema.index({ company_id: 1, month: 1, year: 1 });
+payslipSchema.index({ employee_id: 1, year: 1, month: 1 }, { unique: true });
+payslipSchema.index({ company_id: 1, status: 1 });
+
+// ── Virtual: period label ─────────────────────────────────────
+payslipSchema.virtual("period").get(function () {
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${months[this.month - 1]} ${this.year}`;
+});
+
+module.exports = mongoose.model("Payslip", payslipSchema);

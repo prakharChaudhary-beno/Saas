@@ -1,0 +1,297 @@
+// modules/attendance/models/attendance.model.js
+//
+// Attendance record — ek employee ka ek din ka record.
+//
+// Punch flow:
+//   Employee punch-in karta hai  → checkIn set, status = PRESENT
+//   Employee punch-out karta hai → checkOut set, workingHours calculated
+//
+// Status values:
+//   PRESENT        → Aaya aur punch-in/out kiya
+//   ABSENT         → Koi record nahi / HR ne manually mark kiya
+//   HALF_DAY       → Sirf ek half attend kiya
+//   ON_LEAVE       → Approved leave hai us din
+//   HOLIDAY        → Company/national holiday tha
+//   WEEKEND        → Saturday/Sunday (ya tenant ka off day)
+//   LATE           → Punch-in late tha (grace period ke baad)
+//   WFH            → Work from home
+//
+// workingHours:
+//   checkOut - checkIn in decimal hours (e.g. 8.5 = 8 hrs 30 min)
+//   Null agar abhi punch-out nahi hua
+//
+// overtimeHours:
+//   workingHours - standardHours (only if positive)
+//   e.g. standardHours = 8, workingHours = 9.5 → overtime = 1.5
+
+const mongoose = require("mongoose");
+const { Schema } = mongoose;
+
+const attendanceSchema = new Schema(
+  {
+    // ─── Scope Isolation ─────────────────────────────────────────
+    org_id: {
+      type: Schema.Types.ObjectId,
+      ref: "Organization",
+      required: true,
+      index: true,
+    },
+
+    company_id: {
+      type: Schema.Types.ObjectId,
+      ref: "Company",
+      required: true,
+      index: true,
+    },
+
+    unit_id: {
+      type: Schema.Types.ObjectId,
+      ref: "Unit",
+      required: true,
+      index: true,
+    },
+
+    // ─── Employee Reference ──────────────────────────────────────
+    employeeId: {
+      type: Schema.Types.ObjectId,
+      ref: "Employee",
+      required: true,
+      index: true,
+    },
+
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    // ─── Date (date-only, time zeroed to midnight UTC) ────────────
+    // Index + unique per employee per tenant per day enforced below
+    date: {
+      type: Date,
+      required: true,
+    },
+
+    // ─── Status ──────────────────────────────────────────────────
+    status: {
+      type: String,
+      enum: [
+        "PRESENT",
+        "ABSENT",
+        "HALF_DAY",
+        "ON_LEAVE",
+        "HOLIDAY",
+        "WEEKEND",
+        "LATE",
+        "WFH",
+      ],
+      default: "ABSENT",
+      index: true,
+    },
+
+    // ─── Punch Times (stored as full Date with time) ──────────────
+    checkIn: {
+      type: Date,
+      default: null,
+    },
+
+    checkOut: {
+      type: Date,
+      default: null,
+    },
+
+    // ─── Calculated Fields ────────────────────────────────────────
+    // Decimal hours — calculated on punch-out
+    workingHours: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+
+    // Standard working hours for tenant (copied at record creation)
+    standardHours: {
+      type: Number,
+      default: 8,
+    },
+
+    // workingHours - standardHours (only positive values stored)
+    overtimeHours: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // ─── Late Tracking ────────────────────────────────────────────
+    isLate: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Minutes late (only if isLate = true)
+    lateMinutes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // ─── WFH ─────────────────────────────────────────────────────
+    isWFH: {
+      type: Boolean,
+      default: false,
+    },
+
+    // ─── Leave Reference (if ON_LEAVE) ────────────────────────────
+    leaveRequestId: {
+      type: Schema.Types.ObjectId,
+      ref: "LeaveRequest",
+      default: null,
+    },
+
+    // ─── Holiday Reference (if HOLIDAY) ──────────────────────────
+    holidayId: {
+      type: Schema.Types.ObjectId,
+      ref: "HolidayCalendar",
+      default: null,
+    },
+
+    // ─── Notes / Remarks ─────────────────────────────────────────
+    // HR ya system se note (e.g. "Regularized by HR", "Server downtime")
+    remarks: {
+      type: String,
+      trim: true,
+      maxlength: [500, "Remarks 500 characters se zyada nahi ho sakte"],
+      default: null,
+    },
+
+    // ─── HR Regularization ────────────────────────────────────────
+    // HR ne manually change kiya? (audit trail)
+    isRegularized: {
+      type: Boolean,
+      default: false,
+    },
+
+    regularizedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    regularizedAt: {
+      type: Date,
+      default: null,
+    },
+    isLWP: { type: Boolean, default: false },
+
+    // ─── Shift Info (future-proofing) ─────────────────────────────
+    shiftStart: {
+      type: String, // "09:00" format
+      default: "09:00",
+    },
+
+    shiftEnd: {
+      type: String, // "18:00" format
+      default: "18:00",
+    },
+
+    // Grace period in minutes before marking LATE
+    graceMinutes: {
+      type: Number,
+      default: 15,
+    },
+
+    // ─── Soft Delete ─────────────────────────────────────────────
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      select: false,
+    },
+
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    updatedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+  },
+  {
+    timestamps: true,
+    toJSON:   { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
+
+// ─── Indexes ──────────────────────────────────────────────────────────────────
+
+// Primary lookup: tenant + employee + date (unique — ek din ka ek hi record)
+attendanceSchema.index(
+  { org_id: 1, company_id: 1, unit_id: 1, employeeId: 1, date: 1 },
+  { unique: true }
+);
+
+// Month-wise report query
+attendanceSchema.index({ org_id: 1, company_id: 1, employeeId: 1, date: -1 });
+
+// Status-based reporting
+attendanceSchema.index({ org_id: 1, company_id: 1, status: 1, date: -1 });
+
+// HR bulk view
+attendanceSchema.index({ org_id: 1, company_id: 1, date: 1, status: 1 });
+
+// ─── Virtuals ─────────────────────────────────────────────────────────────────
+
+// Human-readable working hours (e.g. "8h 30m")
+attendanceSchema.virtual("workingHoursFormatted").get(function () {
+  if (this.workingHours == null) return null;
+  const h = Math.floor(this.workingHours);
+  const m = Math.round((this.workingHours - h) * 60);
+  return `${h}h ${m}m`;
+});
+
+// Is employee currently punched in (no checkout yet)?
+attendanceSchema.virtual("isPunchedIn").get(function () {
+  return !!this.checkIn && !this.checkOut;
+});
+
+// ─── Pre-save Hook: Calculate workingHours, overtimeHours ─────────────────────
+
+attendanceSchema.pre("save", function (next) {
+  // workingHours calculate karo jab dono timestamps hain
+  if (this.checkIn && this.checkOut) {
+    const diffMs = this.checkOut - this.checkIn;
+
+    if (diffMs < 0) {
+      return next(new Error("Check-out time cannot be before check-in time"));
+    }
+
+    this.workingHours = parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2));
+
+    // Overtime (only positive)
+    const extra = this.workingHours - this.standardHours;
+    this.overtimeHours = extra > 0 ? parseFloat(extra.toFixed(2)) : 0;
+  }
+
+  // Date ko midnight UTC pe normalize karo (only date part matters)
+  if (this.date) {
+    const d = new Date(this.date);
+    d.setUTCHours(0, 0, 0, 0);
+    this.date = d;
+  }
+
+  // next();
+});
+
+// ─── Query Middleware: Soft delete filter ─────────────────────────────────────
+
+attendanceSchema.pre(/^find/, function (next) {
+  if (!this.getOptions().includeDeleted) {
+    this.where({ isDeleted: false });
+  }
+  // next();
+});
+
+module.exports = mongoose.model("Attendance", attendanceSchema);

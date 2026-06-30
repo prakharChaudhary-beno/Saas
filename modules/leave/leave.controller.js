@@ -113,6 +113,12 @@ exports.toggleStatus = async (req, res, next) => {
     res.status(200).json({ success: true, message: result.message });
   } catch (err) { next(err); }
 };
+exports.getPendingApprovals = async (req, res, next) => {
+  try {
+    const data = await leaveRequestService.getPendingApprovals(req.query, req.user);
+    res.json({ success: true, message: "Pending approvals fetched", data });
+  } catch (err) { next(err); }
+};
 
 // PATCH /leave/:id cancel (explicit)
 exports.cancelLeave = async (req, res, next) => {

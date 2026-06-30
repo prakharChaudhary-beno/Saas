@@ -87,7 +87,9 @@ exports.updatePlan = async (planId, data) => {
     data.modules &&
     JSON.stringify([...oldModuleIds].sort()) !== JSON.stringify([...newModuleIds].sort());
 
-  if (modulesChanged) {
+const featuresChanged = data.features && JSON.stringify(data.features.sort()) !== JSON.stringify((plan.features || []).sort());
+
+if (modulesChanged || featuresChanged) {
     const removedIds = oldModuleIds.filter(id => !newModuleIds.includes(id));
     const addedIds   = newModuleIds.filter(id => !oldModuleIds.includes(id));
 
@@ -126,19 +128,22 @@ exports.updatePlan = async (planId, data) => {
       const newModuleDocs = await Module.find({ _id: { $in: newModuleIds } }).select("slug");
       const newSlugs      = newModuleDocs.map(m => m.slug);
 
-      await Subscription.updateMany(
-        { plan_id: planId, is_active: true, status: { $in: ["Active", "Trial"] } },
-        {
-          $set: {
-            "plan_snapshot.modules":         newSlugs,
-            "plan_snapshot.structure_level": data.structure_level || plan.structure_level,
-            "plan_snapshot.name":            data.name            || plan.name,
-            "plan_snapshot.price_monthly":   data.price_monthly   ?? plan.price_monthly,
-            "plan_snapshot.price_annual":    data.price_annual    ?? plan.price_annual,
-            "plan_snapshot.seat_limit":      data.seat_limit      ?? plan.seat_limit,
-          },
-        }
-      );
+     await Subscription.updateMany(
+    { plan_id: planId, is_active: true, status: { $in: ["Active", "Trial"] } },
+    {
+      $set: {
+        "plan_snapshot.modules":         newSlugs,
+        "plan_snapshot.features":        data.features         || plan.features || [],
+        "plan_snapshot.structure_level": data.structure_level || plan.structure_level,
+        "plan_snapshot.name":            data.name            || plan.name,
+        "plan_snapshot.price_monthly":   data.price_monthly   ?? plan.price_monthly,
+        "plan_snapshot.price_annual":    data.price_annual    ?? plan.price_annual,
+        "plan_snapshot.seat_limit":      data.seat_limit      ?? plan.seat_limit,
+      },
+    }
+);
+
+console.log(`✅ plan_snapshot updated for ${affectedOrgs.length} orgs`);
 
       console.log(`✅ plan_snapshot updated for ${affectedOrgs.length} orgs`);
     }

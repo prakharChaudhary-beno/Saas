@@ -573,6 +573,54 @@ const canAct =
 // CANCEL LEAVE REQUEST
 // ─────────────────────────────────────────────────────────────────────────────
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET PENDING APPROVALS — for L1/L2 approvers
+// GET /leave/pending
+// ─────────────────────────────────────────────────────────────────────────────
+exports.getPendingApprovals = async (query, user) => {
+  const { page = 1, limit = 10 } = query;
+
+  const isHRManager = ["hr_manager", "company_hr_manager", "unit_admin", "org_admin", "company_admin"].includes(user.role);
+
+  const filter = {
+    org_id:     user.orgId,
+    company_id: user.companyId,
+    status:     { $in: ["PENDING", "UNDER_REVIEW"] },
+  };
+
+  if (!isHRManager) {
+    // Manager / Employee-as-manager — sirf jahan woh khud L1/L2 approver hain
+    filter.$or = [
+      { l1ApproverId: user.userId },
+      { l2ApproverId: user.userId },
+    ];
+  } else if (user.unitId) {
+    filter.unit_id = user.unitId;
+  }
+
+  const skip  = (Number(page) - 1) * Number(limit);
+  const total = await LeaveRequest.countDocuments(filter);
+
+  const requests = await LeaveRequest.find(filter)
+    .populate("employeeId",   "name employeeId email")
+    .populate("leaveTypeId",  "name code colorCode")
+    .populate("l1ApproverId", "name email")
+    .populate("l2ApproverId", "name email")
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(Number(limit));
+
+  return {
+    requests,
+    pagination: {
+      total,
+      page:  Number(page),
+      limit: Number(limit),
+      pages: Math.ceil(total / Number(limit)),
+    },
+  };
+};
 exports.cancelLeaveRequest = async (id, user) => {
   const request = await LeaveRequest.findOne({
     _id:        id,

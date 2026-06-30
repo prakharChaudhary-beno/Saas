@@ -75,6 +75,11 @@ router.get(
   checkPermission("leave.read"),
   leaveController.getLeaveLiabilityReport
 );
+router.get(
+  "/pending",
+  checkPermission("leave.approve"),
+  leaveController.getPendingApprovals
+);
 
 // GET /leave/:id  — single leave request
 router.get(

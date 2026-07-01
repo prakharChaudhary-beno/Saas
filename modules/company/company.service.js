@@ -149,10 +149,26 @@ exports.getCompanies = async (reqUser, query = {}) => {
     .limit(Number(limit))
     .lean();
 
-  return {
-    companies,
-    pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) },
-  };
+ const companyIds = companies.map(c => c._id);
+const admins = await User.find({
+  org_id:     reqUser.orgId,
+  company_id: { $in: companyIds },
+  roleId:     await Role.findOne({ slug: "company_admin" }).select("_id").then(r => r?._id),
+  is_deleted: false,
+}).select("name email company_id status").lean();
+
+const adminMap = {};
+admins.forEach(a => { adminMap[String(a.company_id)] = a; });
+
+const companiesWithAdmin = companies.map(c => ({
+  ...c,
+  admin: adminMap[String(c._id)] || null,
+}));
+
+return {
+  companies: companiesWithAdmin,
+  pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) },
+};
 };
 
 // ─── GET ONE ──────────────────────────────────────────────────

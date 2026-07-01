@@ -20,6 +20,14 @@ const companyConfigSchema = new mongoose.Schema(
       index:    true,
     },
 
+    // PAN is required for TDS calculations
+    pan: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      match: [/^[A-Z]{5}\d{4}[A-Z]{1}$/, 'Invalid PAN format. Example: AADCM4321B'],
+    },
+
     fiscalYearStart: { type: Number, min: 1, max: 12, default: 4 },
     timezone:        { type: String, default: "Asia/Kolkata", trim: true },
     currency:        { type: String, default: "INR", uppercase: true, trim: true, maxlength: 3 },

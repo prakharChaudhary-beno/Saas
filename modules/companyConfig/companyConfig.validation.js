@@ -18,6 +18,12 @@ const smtpSchema = Joi.object({
 }).optional();
 
 const configSchema = Joi.object({
+  // ── PAN (required for TDS) ──────────────────────────────────────────
+  pan: Joi.string().trim().uppercase().length(10)
+    .pattern(/^[A-Z]{5}\d{4}[A-Z]{1}$/)
+    .optional()
+    .messages({ 'string.pattern.base': 'Invalid PAN format. Example: AADCM4321B' }),
+
   // ── Existing fields ──────────────────────────────────────────
   fiscalYearStart: Joi.number().integer().min(1).max(12).optional(),
 

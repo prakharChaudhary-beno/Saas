@@ -583,6 +583,15 @@ exports.getPendingApprovals = async (query, user) => {
 
   const isHRManager = ["hr_manager", "company_hr_manager", "unit_admin", "org_admin", "company_admin"].includes(user.role);
 
+  const managerEmployee = await Employee.findOne({ userId: user.userId, isDeleted: false }).select("_id");
+  const isReportingManager = managerEmployee
+    ? !!(await Employee.exists({ reportingManagerId: managerEmployee._id, isDeleted: false, status: "ACTIVE" }))
+    : false;
+
+  if (!isHRManager && !isReportingManager) {
+    throw new AppError("You are not authorized to view pending approvals", 403);
+  }
+
   const filter = {
     org_id:     user.orgId,
     company_id: user.companyId,
@@ -590,7 +599,6 @@ exports.getPendingApprovals = async (query, user) => {
   };
 
   if (!isHRManager) {
-    // Manager / Employee-as-manager — sirf jahan woh khud L1/L2 approver hain
     filter.$or = [
       { l1ApproverId: user.userId },
       { l2ApproverId: user.userId },

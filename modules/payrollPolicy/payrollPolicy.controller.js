@@ -91,3 +91,15 @@ exports.restoreVersion = async (req, res, next) => {
     res.json({ success: true, message: `Policy restored to version ${req.params.version}`, data });
   } catch (err) { next(err); }
 };
+
+// ─── GET /hrms/payroll-policies/meta/pt-states ──────────────────────────────
+exports.getPTStates = async (req, res, next) => {
+  try {
+    const { PT_SLABS } = require("../../config/ptSlabs");
+    const states = Object.keys(PT_SLABS).map(code => ({
+      code,
+      ...PT_SLABS[code]
+    }));
+    res.json({ success: true, message: "PT states fetched", data: states });
+  } catch (err) { next(err); }
+};

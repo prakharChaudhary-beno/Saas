@@ -13,23 +13,48 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
   cloudinary,
   params: async (req, file) => {
+    // Check if it's an Excel/CSV file for bulk import
+    const isExcelOrCsv = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'text/csv'
+    ].includes(file.mimetype)
+
+    if (isExcelOrCsv) {
+      return {
+        folder: 'hrms/bulk-imports',
+        allowed_formats: ['xlsx', 'xls', 'csv'],
+        resource_type: 'raw', // Important: use 'raw' for non-image files
+        public_id: `${Date.now()}-${file.originalname.replace(/\s/g, '_')}`
+      }
+    }
+
+    // Default for employee documents
     return {
-      folder:         `hrms/employees/${req.params.id}/documents`,
-      allowed_formats: ["jpg", "jpeg", "png", "pdf"],
-      resource_type:  "auto",
-      public_id:      `${Date.now()}-${file.originalname.replace(/\s/g, "_")}`
-    };
+      folder: `hrms/employees/${req.params.id}/documents`,
+      allowed_formats: ['jpg', 'jpeg', 'png', 'pdf'],
+      resource_type: 'auto',
+      public_id: `${Date.now()}-${file.originalname.replace(/\s/g, '_')}`
+    }
   }
 });
 
 // File filter
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = ["image/jpeg", "image/png", "image/jpg", "application/pdf"];
+  const allowedTypes = [
+    "image/jpeg", 
+    "image/png", 
+    "image/jpg", 
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+    "application/vnd.ms-excel", // .xls
+    "text/csv" // .csv
+  ];
 
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error("Only JPG, PNG and PDF files are allowed"), false);
+    cb(new Error("Only JPG, PNG, PDF, Excel and CSV files are allowed"), false);
   }
 };
 
@@ -38,7 +63,7 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024  // 5MB max
+    fileSize: 10 * 1024 * 1024  // 10MB max for enterprise
   }
 });
 

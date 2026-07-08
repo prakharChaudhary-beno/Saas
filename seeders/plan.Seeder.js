@@ -16,6 +16,7 @@ const planDefs = [
     seat_limit:      50,
     moduleSlugs:     ["employee", "attendance", "leave", "auth"],
     // Basic features only — no advanced modules
+    // No shift/roster features for basic plan
     features:        [],
     status:          "Active",
     is_custom:       false,
@@ -31,7 +32,9 @@ const planDefs = [
     seat_limit:      200,
     moduleSlugs:     ["employee", "attendance", "leave", "payroll", "auth"],
     features: [
-      "shift_roster",
+      "shift",           // MODERATE GAP 5: explicit shift feature
+      "roster",          // MODERATE GAP 5: explicit roster feature
+      "shift_roster",    // Existing: shift swap feature
       "bulk_import_export",
       "leave_encashment",
       "sandwich_rule",
@@ -57,7 +60,9 @@ const planDefs = [
     moduleSlugs:     ["employee", "attendance", "leave", "payroll", "organisation", "auth"],
     // All features included
     features: [
-      "shift_roster",
+      "shift",           // MODERATE GAP 5: explicit shift feature
+      "roster",          // MODERATE GAP 5: explicit roster feature
+      "shift_roster",    // Existing: shift swap feature
       "bulk_import_export",
       "leave_encashment",
       "sandwich_rule",

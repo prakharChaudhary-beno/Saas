@@ -49,6 +49,23 @@ exports.getAttendance = Joi.object({
     .messages({
       "string.pattern.base": "month format YYYY-MM hona chahiye",
     }),
+  
+  // Date range support (new)
+  startDate: Joi.date()
+    .iso()
+    .optional()
+    .messages({
+      "date.format": "startDate ISO format mein hona chahiye (YYYY-MM-DD)",
+    }),
+  
+  endDate: Joi.date()
+    .iso()
+    .min(Joi.ref("startDate"))
+    .optional()
+    .messages({
+      "date.format": "endDate ISO format mein hona chahiye (YYYY-MM-DD)",
+      "date.min": "endDate, startDate se pehle nahi ho sakti",
+    }),
 
   employeeId: objectId.optional(),
 

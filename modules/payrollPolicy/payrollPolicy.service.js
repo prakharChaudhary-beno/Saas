@@ -34,6 +34,19 @@ org_id:     user.orgId,
     await _checkScopeConflict(null, body, user.companyId);
   }
 
+  // Auto-populate ptSlabs from ptState if PT is enabled
+  if (body.taxCompliance?.ptEnabled && body.taxCompliance?.ptState) {
+    try {
+      const { PT_SLABS } = require("../../config/ptSlabs");
+      const stateCode = body.taxCompliance.ptState;
+      if (PT_SLABS[stateCode]?.slabs) {
+        body.taxCompliance.ptSlabs = PT_SLABS[stateCode].slabs;
+      }
+    } catch (err) {
+      console.error("Failed to auto-populate ptSlabs:", err.message);
+    }
+  }
+
   const policy = await PayrollPolicy.create({
     ...body,
     org_id:     user.orgId,
@@ -143,6 +156,19 @@ exports.updatePolicy = async (id, body, user) => {
     if (body[section]) {
       const existing = policy[section]?.toObject?.() ?? policy[section] ?? {};
       policy[section] = { ...existing, ...body[section] };
+    }
+  }
+
+  // Auto-populate ptSlabs from ptState if PT is enabled
+  if (policy.taxCompliance?.ptEnabled && policy.taxCompliance?.ptState) {
+    try {
+      const { PT_SLABS } = require("../../config/ptSlabs");
+      const stateCode = policy.taxCompliance.ptState;
+      if (PT_SLABS[stateCode]?.slabs) {
+        policy.taxCompliance.ptSlabs = PT_SLABS[stateCode].slabs;
+      }
+    } catch (err) {
+      console.error("Failed to auto-populate ptSlabs:", err.message);
     }
   }
 

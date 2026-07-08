@@ -154,9 +154,18 @@ exports.raiseSwapRequest = async (payload, user) => {
     requesterEmployee, targetUnitId, user.orgId, user.companyId
   );
 
-  // approvalType — default EMPLOYEE_THEN_MANAGER
-  // Future: read from unit AttendancePolicy config
-  const approvalType = "EMPLOYEE_THEN_MANAGER";
+  // CRITICAL GAP 3: Read approvalType from AttendancePolicy (dynamic)
+  // Default to EMPLOYEE_THEN_MANAGER if no policy found
+  const AttendancePolicy = require("../attendancePolicy/models/attendancePolicy.model");
+  const policy = await AttendancePolicy.findOne({
+    org_id:     toObjId(user.orgId),
+    company_id: toObjId(user.companyId),
+    unit_id:    toObjId(targetUnitId),
+    status:     "active",
+    isDeleted:  false,
+  }).select("shiftSwapApprovalType").lean();
+
+  const approvalType = policy?.shiftSwapApprovalType || "EMPLOYEE_THEN_MANAGER";
 
   const initialStatus = approvalType === "MANAGER_ONLY"
     ? "PENDING_APPROVAL"
@@ -522,11 +531,11 @@ exports.listSwapRequests = async (query, user) => {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(Number(limit))
-    .populate("requesterEmployeeId", "name employeeId")
-    .populate("requestedEmployeeId", "name employeeId")
-    .populate("requesterShiftId",    "name startTime endTime")
-    .populate("requestedShiftId",    "name startTime endTime")
-    .populate("managerId",           "name email")
+    .populate({ path: "requesterEmployeeId", select: "name employeeId email", model: "Employee" })
+    .populate({ path: "requestedEmployeeId", select: "name employeeId email", model: "Employee" })
+    .populate({ path: "requesterShiftId",    select: "name startTime endTime" })
+    .populate({ path: "requestedShiftId",    select: "name startTime endTime" })
+    .populate({ path: "managerId",           select: "name email" })
     .lean();
 
   return { swaps, total, page: Number(page), totalPages: Math.ceil(total / Number(limit)) };
@@ -540,11 +549,11 @@ exports.getSwapRequestById = async (id, user) => {
     company_id: toObjId(user.companyId),
     is_deleted: false,
   })
-    .populate("requesterEmployeeId", "name employeeId departmentId")
-    .populate("requestedEmployeeId", "name employeeId departmentId")
-    .populate("requesterShiftId",    "name startTime endTime shiftType")
-    .populate("requestedShiftId",    "name startTime endTime shiftType")
-    .populate("managerId",           "name email")
+    .populate({ path: "requesterEmployeeId", select: "name employeeId departmentId email", model: "Employee" })
+    .populate({ path: "requestedEmployeeId", select: "name employeeId departmentId email", model: "Employee" })
+    .populate({ path: "requesterShiftId",    select: "name startTime endTime shiftType" })
+    .populate({ path: "requestedShiftId",    select: "name startTime endTime shiftType" })
+    .populate({ path: "managerId",           select: "name email" })
     .lean();
 
   if (!swap) throw new AppError("Swap request not found", 404);

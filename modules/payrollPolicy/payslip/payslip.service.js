@@ -106,8 +106,28 @@ exports.getAllPayslips = async (query, user) => {
 
   const filter = buildScope(user);
 
-  if (year)       filter.year   = Number(year);
-  if (month)      filter.month  = Number(month);
+  // Handle month - can be numeric (7) or date format (YYYY-MM)
+  if (month) {
+    const monthStr = String(month);
+    if (monthStr.includes('-')) {
+      const parts = monthStr.split('-');
+      const parsedMonth = parseInt(parts[1], 10);
+      if (!isNaN(parsedMonth) && parsedMonth >= 1 && parsedMonth <= 12) {
+        filter.month = parsedMonth;
+      }
+      if (!year) {
+        const parsedYear = parseInt(parts[0], 10);
+        if (!isNaN(parsedYear)) filter.year = parsedYear;
+      }
+    } else {
+      const parsedMonth = parseInt(monthStr, 10);
+      if (!isNaN(parsedMonth)) filter.month = parsedMonth;
+    }
+  }
+  if (year) {
+    const parsedYear = parseInt(String(year), 10);
+    if (!isNaN(parsedYear)) filter.year = parsedYear;
+  }
   if (status)     filter.status = status;
   if (employeeId) filter.employee_id = toObjId(employeeId);
 

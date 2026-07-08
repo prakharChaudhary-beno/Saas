@@ -14,7 +14,7 @@ router.use(authenticate, checkTrial);
 // ── POST /hrms/attendance-policies ───────────────────────────────────────────
 router.post(
   "/",
-  checkRole("hr_manager"),
+  checkRole("hr_manager", "unit_admin"),
   validate(createPolicySchema),
   ctrl.createPolicy
 );
@@ -22,21 +22,21 @@ router.post(
 // ── GET /hrms/attendance-policies ────────────────────────────────────────────
 router.get(
   "/",
-  checkRole("hr_manager"),
+  checkRole("hr_manager", "unit_admin"),
   ctrl.getPolicies
 );
 
-// ── GET /hrms/attendance-policies/:id ────────────────────────────────────────
+// ── GET /hrms/attendance-policies/:id ────────────────────────────────────────────
 router.get(
   "/:id",
-  checkRole("hr_manager"),
+  checkRole("hr_manager", "unit_admin"),
   ctrl.getPolicyById
 );
 
 // ── PUT /hrms/attendance-policies/:id ────────────────────────────────────────
 router.put(
   "/:id",
-  checkRole("hr_manager"),
+  checkRole("hr_manager", "unit_admin"),
   validate(updatePolicySchema),
   ctrl.updatePolicy
 );
@@ -46,12 +46,12 @@ router.get("/:id/versions",          checkRole("hr_manager"), ctrl.getVersionHis
 router.get("/:id/versions/:version", checkRole("hr_manager"), ctrl.getVersionSnapshot);
 router.post("/:id/restore/:version", checkRole("hr_manager"), ctrl.restoreVersion);
 
-// ── Status transitions — Unit Admin only ──────────────────────────────────────
-router.patch("/:id/activate",   checkRole("unit_admin"), ctrl.activatePolicy);
-router.patch("/:id/deactivate", checkRole("unit_admin"), ctrl.deactivatePolicy);
-router.patch("/:id/archive",    checkRole("unit_admin"), ctrl.archivePolicy);
+// ── Status transitions ──────────────────────────────────────
+router.patch("/:id/activate",   checkRole("hr_manager", "unit_admin"), ctrl.activatePolicy);
+router.patch("/:id/deactivate", checkRole("hr_manager", "unit_admin"), ctrl.deactivatePolicy);
+router.patch("/:id/archive",    checkRole("hr_manager", "unit_admin"), ctrl.archivePolicy);
 
-// ── DELETE /hrms/attendance-policies/:id ──────────────────────────────────────
-router.delete("/:id", checkRole("unit_admin"), ctrl.deletePolicy);
+// ── DELETE /hrms/attendance-policies/:id ──────────────────────────────────────────
+router.delete("/:id", checkRole("hr_manager", "unit_admin"), ctrl.deletePolicy);
 
 module.exports = router;

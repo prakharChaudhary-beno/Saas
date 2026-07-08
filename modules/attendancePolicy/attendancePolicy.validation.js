@@ -69,6 +69,10 @@ const createPolicySchema = Joi.object({
   sandwichRule:  sandwichRuleSchema.optional(),
   overtime:      overtimeSchema.optional(),
   applicableFor: applicableForSchema.optional(),
+  shiftSwapApprovalType: Joi.string()
+    .valid("EMPLOYEE_THEN_MANAGER", "MANAGER_ONLY")
+    .optional()
+    .default("EMPLOYEE_THEN_MANAGER"),
 });
 
 // ─── Update Schema (all fields optional) ──────────────────────────────────────
@@ -82,6 +86,9 @@ const updatePolicySchema = Joi.object({
   overtime:      overtimeSchema.optional(),
   applicableFor: applicableForSchema.optional(),
   status:        Joi.string().valid("draft", "active").optional(),
+  shiftSwapApprovalType: Joi.string()
+    .valid("EMPLOYEE_THEN_MANAGER", "MANAGER_ONLY")
+    .optional(),
 });
 
 module.exports = { createPolicySchema, updatePolicySchema };

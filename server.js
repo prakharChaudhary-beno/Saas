@@ -7,6 +7,10 @@ mongoose.connection.once('open', async () => {
   console.log('📦 Running database migrations...');
   const dropTenantIdIndex = require('./modules/companyConfig/migrations/dropTenantIdIndex');
   await dropTenantIdIndex();
+  
+  // Fix leave type employment types
+  const migrateEmploymentTypes = require('./migrations/fix-leave-type-employment');
+  await migrateEmploymentTypes();
 });
 
 const app = require('./app');

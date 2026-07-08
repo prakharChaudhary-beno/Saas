@@ -50,53 +50,65 @@ router.put(
   companyConfigController.updateConfig
 );
 
-// GET /hrms/me/attendance/today — aaj ka punch status
+// GET /hrms/me/attendance/today — aaj ka punch status (employee + unit_admin + manager)
 router.get(
   "/me/today",
-  checkRole("employee"),
+  checkRole("employee", "unit_admin", "manager", "hr_manager"),
   attendanceController.getTodayStatus
 );
 
-// GET /hrms/me/attendance/summary?month=YYYY-MM — monthly summary
+// GET /hrms/me/attendance/summary?month=YYYY-MM — monthly summary (employee + unit_admin + manager)
 router.get(
   "/me/summary",
-  checkRole("employee"),
+  checkRole("employee", "unit_admin", "manager", "hr_manager"),
   validate(attendanceValidation.getSummary, "query"),
   attendanceController.getMySummary
 );
 
-// GET /hrms/me/attendance?month=YYYY-MM — full detail records
+// GET /hrms/me/attendance?month=YYYY-MM — full detail records (employee + unit_admin + manager)
 router.get(
   "/me",
-  checkRole("employee"),  
+  checkRole("employee", "unit_admin", "manager", "hr_manager"),  
   validate(attendanceValidation.getMyAttendance, "query"),
   attendanceController.getMyAttendance
 );
 
-// POST /hrms/me/attendance/punch-in — punch in
+// POST /hrms/me/attendance/punch-in — punch in (employee + unit_admin + manager)
 router.post(
   "/me/punch-in",
-  checkRole("employee"),
+  checkRole("employee", "unit_admin", "manager", "hr_manager"),
   validate(attendanceValidation.punchIn),
   attendanceController.punchIn
 );
 
-// POST /hrms/me/attendance/punch-out — punch out
+// POST /hrms/me/attendance/punch-out — punch out (employee + unit_admin + manager)
 router.post(
   "/me/punch-out",
-  checkRole("employee"),
+  checkRole("employee", "unit_admin", "manager", "hr_manager"),
   validate(attendanceValidation.punchOut),
   attendanceController.punchOut
 );
 
 // ─────────────────────────────────────────────────────────────
-// HR MANAGER routes
+// MANAGER routes (Team Attendance)
 // ─────────────────────────────────────────────────────────────
 
-// GET /hrms/attendance?month=&employeeId=&status= — all employees
+// GET /hrms/attendance/team — manager sees their team's attendance
+router.get(
+  "/team",
+  checkRole("manager"),
+  validate(attendanceValidation.getAttendance, "query"),
+  attendanceController.getTeamAttendance
+);
+
+// ─────────────────────────────────────────────────────────────
+// HR MANAGER + UNIT ADMIN routes
+// ─────────────────────────────────────────────────────────────
+
+// GET /hrms/attendance?month=&employeeId=&status= — all employees (unit scoped)
 router.get(
   "/",
-  checkRole("hr_manager"),
+  checkRole("hr_manager", "unit_admin"),
   validate(attendanceValidation.getAttendance, "query"),
   attendanceController.getAllAttendance
 );

@@ -38,13 +38,31 @@ router.get(
   ctrl.getCompanyDashboard
 );
 
-// ─── Unit Admin / HR Dashboard ────────────────────────────────────────────────
+// ─── Unit Admin Dashboard ────────────────────────────────────────────────
 // GET /api/v1/dashboard/unit?month=YYYY-MM
 // unit_admin + above
 router.get(
   "/unit",
   checkRole("unit_admin"),
   ctrl.getUnitDashboard
+);
+
+// ─── HR Manager Dashboard ────────────────────────────────────────────────
+// GET /api/v1/dashboard/hr?month=YYYY-MM
+// hr_manager role
+router.get(
+  "/hr",
+  checkRole("hr_manager"),
+  ctrl.getUnitDashboard
+);
+
+// ─── Manager Dashboard ────────────────────────────────────────────────────────
+// GET /api/v1/dashboard/manager?month=YYYY-MM
+// manager role (L1 approver, team overview)
+router.get(
+  "/manager",
+  checkRole("manager"),
+  ctrl.getManagerDashboard
 );
 
 // ─── Employee Self-Service Dashboard ──────────────────────────────────────────

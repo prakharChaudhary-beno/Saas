@@ -14,34 +14,20 @@ router.use(authenticate, checkTrial);
 
 // ── SPECIFIC routes PEHLE (/:id se pehle hona chahiye) ───────────────────────
 
-// POST /leave/balances/initialize
-router.post(
-  "/balances/initialize",
-  checkPermission("leave.create"),
-  validate(leaveValidation.initializeBalance),
-  leaveController.initializeLeaveBalance
-);
-
 // GET /leave/balances/my  ← /:id se UPAR hona chahiye
+// Dynamic balance calculation from active policy
 router.get(
   "/balances/my",
   leaveController.getMyLeaveBalances
 );
 
 // GET /leave/balances/:employeeId
+// Dynamic balance calculation from active policy
 router.get(
   "/balances/:employeeId",
   checkPermission("leave.read"),
   validate(leaveValidation.getLeaveBalances, "query"),
   leaveController.getLeaveBalances
-);
-
-// PATCH /leave/balances/:id/adjust
-router.patch(
-  "/balances/:id/adjust",
-  checkPermission("leave.update"),
-  validate(leaveValidation.adjustLeaveBalance),
-  leaveController.adjustLeaveBalance
 );
 
 // ── LEAVE REQUESTS ────────────────────────────────────────────────────────────

@@ -297,11 +297,14 @@ exports.getCompanyDashboard = async (user, query = {}) => {
 exports.getUnitDashboard = async (user, query = {}) => {
   const { orgId } = user;
 
+  console.log('[getUnitDashboard] CALLED - user.role:', user.role, 'user.unitId:', user.unitId, 'query:', query);
+
   // ── Resolve target unit based on role ───────────────────────────
   let unitId, companyId;
 
-  if (["org_admin", "company_admin", "unit_admin"].includes(user.role)) {
+  if (["org_admin", "company_admin", "unit_admin", "hr_manager"].includes(user.role)) {
     unitId = query.unitId || user.unitId;
+    console.log('[getUnitDashboard] Role allowed, resolved unitId:', unitId);
 
     const unitFilter = {
       _id:        unitId,
@@ -310,11 +313,16 @@ exports.getUnitDashboard = async (user, query = {}) => {
       ...(user.role !== "org_admin" && { company_id: user.companyId }),
     };
 
+    console.log('[getUnitDashboard] unitFilter:', JSON.stringify(unitFilter));
+
     const unit = await Unit.findOne(unitFilter);
+    console.log('[getUnitDashboard] unit found:', unit ? unit._id : 'NULL');
+
     if (!unit) throw new AppError("Unit not found", 404);
 
     companyId = unit.company_id;
   } else {
+    console.log('[getUnitDashboard] Role NOT in allowed list, throwing 403');
     throw new AppError("Access denied", 403);
   }
 
@@ -639,6 +647,124 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
       name: h.name,
       date: h.date,
       type: h.type,
+    })),
+  };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. MANAGER DASHBOARD
+// ─────────────────────────────────────────────────────────────────────────────
+// Manager is an employee with team responsibilities (L1 approver)
+// Returns: team stats + pending approvals + manager's own employee dashboard
+
+exports.getManagerDashboard = async (user, query = {}) => {
+  const { orgId, companyId, unitId } = user;
+  const month = query.month || currentMonthStr();
+  const { start: monthStart, end: monthEnd } = monthRange(month);
+  const { start: todayStart, end: todayEnd } = todayRange();
+
+  // 1. Get manager's employee record
+  const managerEmployee = await Employee.findOne({
+    userId: user.userId,
+    org_id: orgId,
+    isDeleted: false,
+  }).select("_id name email employeeId departmentId designationId reportingManagerId").lean();
+
+  if (!managerEmployee) {
+    throw new AppError("Employee record not found", 404);
+  }
+
+  // 2. Get team members (employees reporting to this manager)
+  const teamMembers = await Employee.find({
+    reportingManagerId: managerEmployee._id,
+    org_id: orgId,
+    company_id: companyId,
+    unit_id: unitId,
+    isDeleted: false,
+    status: "ACTIVE",
+  }).select("_id name employeeId status").lean();
+
+  const teamIds = teamMembers.map(e => e._id);
+
+  // 3. Team attendance for today
+  const teamAttendanceToday = await Attendance.find({
+    org_id: orgId,
+    company_id: companyId,
+    unit_id: unitId,
+    employeeId: { $in: teamIds },
+    date: { $gte: todayStart, $lte: todayEnd },
+  }).select("employeeId status checkIn checkOut").lean();
+
+  // 4. Pending leave requests from team
+  const pendingLeaves = await LeaveRequest.find({
+    org_id: orgId,
+    company_id: companyId,
+    unit_id: unitId,
+    employeeId: { $in: teamIds },
+    status: "PENDING",
+    isDeleted: false,
+  })
+    .sort({ createdAt: -1 })
+    .limit(10)
+    .populate("employeeId", "name employeeId")
+    .populate("leaveTypeId", "name code")
+    .select("startDate endDate totalDays status createdAt")
+    .lean();
+
+  // 5. Team attendance summary for the month
+  const teamAttSummary = await Attendance.aggregate([
+    {
+      $match: {
+        org_id: toObjId(orgId),
+        company_id: toObjId(companyId),
+        unit_id: toObjId(unitId),
+        employeeId: { $in: teamIds.map(id => toObjId(id)) },
+        date: { $gte: monthStart, $lte: monthEnd },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        present: { $sum: { $cond: [{ $in: ["$status", ["PRESENT", "WFH", "LATE"]] }, 1, 0] } },
+        absent: { $sum: { $cond: [{ $eq: ["$status", "ABSENT"] }, 1, 0] } },
+        late: { $sum: { $cond: [{ $eq: ["$status", "LATE"] }, 1, 0] } },
+        onLeave: { $sum: { $cond: [{ $eq: ["$status", "ON_LEAVE"] }, 1, 0] } },
+      },
+    },
+  ]);
+
+  const attSummary = teamAttSummary[0] || { present: 0, absent: 0, late: 0, onLeave: 0 };
+
+  return {
+    generatedAt: new Date(),
+    month,
+    manager: {
+      id: managerEmployee._id,
+      employeeId: managerEmployee.employeeId,
+      name: managerEmployee.name,
+      email: managerEmployee.email,
+    },
+    team: {
+      total: teamMembers.length,
+      members: teamMembers.slice(0, 10),
+    },
+    todayAttendance: {
+      present: teamAttendanceToday.filter(a => ["PRESENT", "LATE", "WFH"].includes(a.status)).length,
+      absent: teamAttendanceToday.filter(a => a.status === "ABSENT").length,
+      onLeave: teamAttendanceToday.filter(a => a.status === "ON_LEAVE").length,
+      late: teamAttendanceToday.filter(a => a.status === "LATE").length,
+      records: teamAttendanceToday,
+    },
+    monthAttendance: attSummary,
+    pendingLeaves: pendingLeaves.map(l => ({
+      id: l._id,
+      employee: l.employeeId ? { name: l.employeeId.name, employeeId: l.employeeId.employeeId } : null,
+      leaveType: l.leaveTypeId ? { name: l.leaveTypeId.name, code: l.leaveTypeId.code } : null,
+      startDate: l.startDate,
+      endDate: l.endDate,
+      totalDays: l.totalDays,
+      status: l.status,
+      appliedOn: l.createdAt,
     })),
   };
 };

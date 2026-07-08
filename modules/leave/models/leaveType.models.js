@@ -56,7 +56,8 @@ const leaveTypeSchema = new mongoose.Schema(
 
     applicableEmploymentTypes: {
       type:    [String],
-      default: ["FULL_TIME"],
+      enum:    ["FULL_TIME", "PART_TIME", "CONTRACT", "INTERN"],
+      default: ["FULL_TIME", "PART_TIME", "CONTRACT", "INTERN"],
     },
 
     requiresDocumentAfterDays: { type: Number, default: null },

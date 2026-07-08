@@ -352,15 +352,49 @@ const taxComplianceSchema = new mongoose.Schema(
       default: 21000,                        // employees earning above this are ESI-exempt
     },
 
-    // Professional Tax
+    // Professional Tax - Enhanced with state-wise slabs
     ptEnabled: {
       type: Boolean,
-      default: false,                        // state-specific
+      default: false,
     },
 
     ptState: {
       type: String,
-      default: null,                         // e.g. "MH", "KA", "TN"
+      default: null,
+      enum: [
+        null, '',
+        'AN', 'AP', 'AR', 'AS', 'BR', 'CH', 'CT', 'DN', 'DD', 'DL', 'GA', 'GJ', 'HR', 'HP', 'JK', 'JH',
+        'KA', 'KL', 'LA', 'LD', 'MP', 'MH', 'MN', 'ML', 'MZ', 'NL', 'OD', 'PY', 'PB', 'RJ', 'SK', 'TN',
+        'TG', 'TR', 'UP', 'UT', 'WB'
+      ],
+    },
+
+    ptSlabs: [{
+      minGross: { type: Number, default: 0 },
+      maxGross: { type: Number, default: null },
+      monthlyAmount: { type: Number, default: 0 },
+      _id: false,
+    }],
+
+    // Labour Welfare Fund
+    lwfEnabled: {
+      type: Boolean,
+      default: false,
+    },
+
+    lwfState: {
+      type: String,
+      default: null,
+    },
+
+    lwfEmployeeRate: {
+      type: Number,
+      default: 0,
+    },
+
+    lwfEmployerRate: {
+      type: Number,
+      default: 0,
     },
 
     // Gratuity
@@ -474,6 +508,100 @@ const payrollPolicySchema = new mongoose.Schema(
       },
     },
 
+    // ── TDS & Tax Regime Configuration ───────────────────────────────────────
+    tdsConfig: {
+      enabled: { type: Boolean, default: true },
+      taxRegime: {
+        type: String,
+        enum: ['old', 'new'],
+        default: 'new',
+      },
+      // Old regime deductions
+      standardDeduction: { type: Number, default: 50000 },
+      professionalTaxExempt: { type: Boolean, default: true },
+      hraExemptionMethod: {
+        type: String,
+        enum: ['actual', 'standard', 'none'],
+        default: 'actual',
+      },
+      // New regime (FY 2023-24 onwards)
+      newRegimeRebate: { type: Boolean, default: true },
+      newRegimeSurcharge: { type: Boolean, default: true },
+      // Education cess
+      educationCessRate: { type: Number, default: 4 }, // 4% on tax
+      // Surcharge slabs
+      surchargeSlabs: [{
+        minIncome: { type: Number, default: 0 },
+        maxIncome: { type: Number, default: null },
+        rate: { type: Number, default: 0 },
+        _id: false,
+      }],
+      _id: false,
+    },
+
+    // ── Investment Declarations ───────────────────────────────────────────────
+    investmentConfig: {
+      enabled: { type: Boolean, default: true },
+      // 80C limits
+      max80C: { type: Number, default: 150000 },
+      max80CCD: { type: Number, default: 50000 }, // Additional NPS
+      max80D: { type: Number, default: 75000 }, // Health insurance (25K self + 25K parents, 50K if senior)
+      max80E: { type: Number, default: null }, // Education loan (no limit)
+      max80EEA: { type: Number, default: 150000 }, // Additional housing interest
+      max80TTA: { type: Number, default: 10000 }, // Savings interest
+      max80G: { type: Number, default: null }, // Donations (varies)
+      max80EEB: { type: Number, default: 50000 }, // Electric vehicle loan
+      max80DD: { type: Number, default: 75000 }, // Disabled dependent
+      max80DDB: { type: Number, default: 40000 }, // Medical treatment
+      max80U: { type: Number, default: 75000 }, // Personal disability
+      // Submission deadline
+      submissionDeadline: { type: String, default: '01-15' }, // Jan 15
+      // Proof submission deadline
+      proofDeadline: { type: String, default: '02-15' }, // Feb 15
+      _id: false,
+    },
+
+    // ── Salary Structure Configuration ─────────────────────────────────────────
+    salaryStructure: {
+      // Earnings components
+      fixedComponents: [{
+        code: { type: String, required: true },
+        name: { type: String, required: true },
+        type: { type: String, enum: ['FIXED', 'PERCENTAGE', 'FORMULA'], default: 'FIXED' },
+        value: { type: Number, default: 0 },
+        percentage: { type: Number, default: 0 },
+        baseComponent: { type: String },
+        formula: { type: String },
+        taxable: { type: Boolean, default: true },
+        pfApplicable: { type: Boolean, default: false },
+        esiApplicable: { type: Boolean, default: false },
+        ptApplicable: { type: Boolean, default: false },
+        order: { type: Number, default: 0 },
+        _id: false,
+      }],
+      // Reimbursements
+      reimbursements: [{
+        code: { type: String, required: true },
+        name: { type: String, required: true },
+        monthlyLimit: { type: Number, default: 0 },
+        taxExempt: { type: Boolean, default: true },
+        requireProof: { type: Boolean, default: true },
+       rollover: { type: Boolean, default: false },
+        _id: false,
+      }],
+      // Variable pay
+      variablePay: [{
+        code: { type: String, required: true },
+        name: { type: String, required: true },
+        frequency: { type: String, enum: ['MONTHLY', 'QUARTERLY', 'ANNUAL'], default: 'ANNUAL' },
+        percentageOfCTC: { type: Number, default: 0 },
+        payoutMonths: [{ type: Number }],
+        linkedToPerformance: { type: Boolean, default: true },
+        _id: false,
+      }],
+      _id: false,
+    },
+
     // ── Core Policy Sections ──────────────────────────────────────────────────
     salaryCycle:        { type: salaryCycleSchema,        default: () => ({}) },
     lop:                { type: lopSchema,                default: () => ({}) },
@@ -515,9 +643,9 @@ payrollPolicySchema.virtual("isActive").get(function () {
 });
 
 // ─── Pre-save Hook ────────────────────────────────────────────────────────────
-payrollPolicySchema.pre("save", function (next) {
+payrollPolicySchema.pre("save", async function () {
   if (this.effectiveTo && this.effectiveTo <= this.effectiveFrom) {
-    return next(new Error("effectiveTo must be after effectiveFrom"));
+    throw new Error("effectiveTo must be after effectiveFrom");
   }
 
   // salaryCycle: payrollRunDate must be <= endDay
@@ -525,7 +653,7 @@ payrollPolicySchema.pre("save", function (next) {
     this.salaryCycle &&
     this.salaryCycle.payrollRunDate > this.salaryCycle.endDay
   ) {
-    return next(new Error("salaryCycle.payrollRunDate must be <= salaryCycle.endDay"));
+    throw new Error("salaryCycle.payrollRunDate must be <= salaryCycle.endDay");
   }
 
   // salaryCycle: startDay < endDay
@@ -533,18 +661,34 @@ payrollPolicySchema.pre("save", function (next) {
     this.salaryCycle &&
     this.salaryCycle.startDay >= this.salaryCycle.endDay
   ) {
-    return next(new Error("salaryCycle.startDay must be less than salaryCycle.endDay"));
+    throw new Error("salaryCycle.startDay must be less than salaryCycle.endDay");
   }
 
-//   next();
+  // Clear PT state and slabs if PT is disabled
+  if (this.taxCompliance && !this.taxCompliance.ptEnabled) {
+    this.taxCompliance.ptState = null;
+    this.taxCompliance.ptSlabs = [];
+  }
+
+  // Auto-populate ptSlabs from ptState if PT is enabled and ptState is set
+  if (this.taxCompliance?.ptEnabled && this.taxCompliance?.ptState) {
+    try {
+      const { PT_SLABS } = require("../../config/ptSlabs");
+      const stateCode = this.taxCompliance.ptState;
+      if (PT_SLABS[stateCode]?.slabs) {
+        this.taxCompliance.ptSlabs = PT_SLABS[stateCode].slabs;
+      }
+    } catch (err) {
+      console.error("Failed to auto-populate ptSlabs:", err.message);
+    }
+  }
 });
 
 // ─── Query Middleware ─────────────────────────────────────────────────────────
-payrollPolicySchema.pre(/^find/, function (next) {
+payrollPolicySchema.pre(/^find/, async function () {
   if (!this.getOptions().includeDeleted) {
     this.where({ isDeleted: false });
   }
-//   next();
 });
 
 // ─── Static Methods ───────────────────────────────────────────────────────────

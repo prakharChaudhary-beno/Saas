@@ -211,19 +211,6 @@ exports.applyRegularization = async (payload, user) => {
 
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
-  if (reqDate > today) throw new AppError("Cannot regularize a future date", 400);
-
-  // Config pehle fetch karo
-  const config = await CompanyConfig.findOne({ company_id: toObjId(user.companyId) })
-    .select("regularisationApprovalFlow regularisationWindowDays").lean();
-
-  const windowDays   = config?.regularisationWindowDays   || 30;
-  const approvalFlow = config?.regularisationApprovalFlow || "L2_ONLY";
-
-  const diffDays = (today - reqDate) / (1000 * 60 * 60 * 24);
-  if (diffDays > windowDays) {
-    throw new AppError(`Cannot regularize attendance older than ${windowDays} days`, 400);
-  }
 
   // Employee fetch
   let employee;
@@ -253,6 +240,85 @@ exports.applyRegularization = async (payload, user) => {
     }
 
     if (!employee) throw new AppError("Employee record not found — please ensure your employee profile is linked", 404);
+  }
+
+  // ─── FETCH EFFECTIVE POLICY ─────────────────────────────────────
+  const RegularisationPolicy = require("./models/regularisationPolicy.model");
+  
+  // Fallback to company config if no policy
+  const policy = await RegularisationPolicy.findOne({
+    org_id: toObjId(user.orgId),
+    company_id: toObjId(user.companyId),
+    enabled: true,
+    status: "active",
+    isDeleted: false,
+    $or: [
+      { unit_id: employee.unit_id },
+      { unit_id: null },
+    ],
+  }).sort({ unit_id: -1 }).lean();
+
+  // Fallback to company config if no policy found
+  const config = policy ? null : await CompanyConfig.findOne({ company_id: toObjId(user.companyId) })
+    .select("regularisationApprovalFlow regularisationWindowDays").lean();
+
+  const windowDays = policy?.requestWindow?.pastDaysAllowed || config?.regularisationWindowDays || 30;
+  const approvalFlow = policy?.approvalFlow || config?.regularisationApprovalFlow || "L2_ONLY";
+  const allowFuture = policy?.requestWindow?.futureAllowed || false;
+
+  // Future date check
+  if (!allowFuture && reqDate > today) {
+    throw new AppError("Cannot regularize a future date", 400);
+  }
+
+  // Window check
+  const diffDays = (today - reqDate) / (1000 * 60 * 60 * 24);
+  if (diffDays > windowDays) {
+    throw new AppError(`Cannot regularize attendance older than ${windowDays} days`, 400);
+  }
+
+  // ─── VALIDATE AGAINST POLICY ─────────────────────────────────────
+  if (policy) {
+    // Check if regularisation type is allowed
+    const typeMap = {
+      "MISSED_PUNCH_IN": "missed_punch",
+      "MISSED_PUNCH_OUT": "missed_punch",
+      "BOTH_MISSED": "missed_punch",
+      "WRONG_TIME": "late",
+      "WFH_CORRECTION": "absent",
+      "STATUS_CORRECTION": "absent",
+    };
+    
+    const reqType = typeMap[regularizationType] || "absent";
+    
+    if (!policy.allowedFor.includes(reqType)) {
+      throw new AppError(`Regularisation for '${reqType}' is not permitted under current policy`, 400);
+    }
+
+    // Check monthly quota
+    if (policy.maxRequestsPerMonth) {
+      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+      const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59);
+      
+      const monthlyCount = await AttendanceRegularization.countDocuments({
+        employeeId: employee._id,
+        org_id: toObjId(user.orgId),
+        createdAt: { $gte: monthStart, $lte: monthEnd },
+        status: { $nin: ["REJECTED", "CANCELLED"] },
+        isDeleted: false,
+      });
+
+      if (monthlyCount >= policy.maxRequestsPerMonth) {
+        throw new AppError(`Monthly regularisation limit (${policy.maxRequestsPerMonth}) reached`, 400);
+      }
+    }
+
+    // Check document requirement
+    if (policy.documentRequired?.enabled && policy.documentRequired?.forTypes?.includes(reqType)) {
+      if (!attachments || attachments.length === 0) {
+        throw new AppError(`Document is mandatory for '${reqType}' regularisation`, 400);
+      }
+    }
   }
 
   // Duplicate check
@@ -290,6 +356,7 @@ exports.applyRegularization = async (payload, user) => {
     attendanceId:      attendance?._id || null,
     date:              reqDate,
     approvalFlow,
+    policyId:          policy?._id || null,  // Link to policy
     leaveTypeId:       payload.leaveTypeId ? toObjId(payload.leaveTypeId) : null,
     requestedCheckIn:  requestedCheckIn  ? new Date(requestedCheckIn)  : null,
     requestedCheckOut: requestedCheckOut ? new Date(requestedCheckOut) : null,

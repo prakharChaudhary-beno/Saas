@@ -150,11 +150,76 @@ exports.toggleHoliday = async (id, user) => {
 exports.getMasterHolidays = async (query) => {
   const { year, country = "IN" } = query;
 
-  const filter = { isActive: true, country };
+  const filter = { country };
   if (year) filter.year = Number(year);
 
   const HolidayMaster = require("./models/holidayMaster.model");
   return await HolidayMaster.find(filter).sort({ date: 1 });
+};
+
+// ─── MANAGE MASTER HOLIDAYS ───────────────────────────────
+exports.createMasterHoliday = async (payload) => {
+  const HolidayMaster = require("./models/holidayMaster.model");
+  
+  // Calculate year from date
+  const year = new Date(payload.date).getFullYear();
+  
+  const holiday = await HolidayMaster.create({
+    ...payload,
+    year,
+    country: payload.country || 'IN'
+  });
+  
+  return holiday;
+};
+
+exports.updateMasterHoliday = async (id, payload) => {
+  const HolidayMaster = require("./models/holidayMaster.model");
+  
+  const updateData = { ...payload };
+  if (payload.date) {
+    updateData.year = new Date(payload.date).getFullYear();
+  }
+  
+  const holiday = await HolidayMaster.findByIdAndUpdate(
+    id,
+    updateData,
+    { new: true, runValidators: true }
+  );
+  
+  if (!holiday) {
+    throw new AppError("Holiday not found", 404);
+  }
+  
+  return holiday;
+};
+
+exports.toggleMasterHoliday = async (id) => {
+  const HolidayMaster = require("./models/holidayMaster.model");
+  
+  const holiday = await HolidayMaster.findById(id);
+  if (!holiday) {
+    throw new AppError("Holiday not found", 404);
+  }
+  
+  holiday.isActive = !holiday.isActive;
+  await holiday.save();
+  
+  return {
+    message: `Holiday ${holiday.isActive ? 'activated' : 'deactivated'}`,
+    data: holiday
+  };
+};
+
+exports.deleteMasterHoliday = async (id) => {
+  const HolidayMaster = require("./models/holidayMaster.model");
+  
+  const holiday = await HolidayMaster.findByIdAndDelete(id);
+  if (!holiday) {
+    throw new AppError("Holiday not found", 404);
+  }
+  
+  return { message: "Holiday deleted successfully" };
 };
 
 // ─── IMPORT FROM MASTER ───────────────────────────────────

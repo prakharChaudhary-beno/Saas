@@ -15,8 +15,52 @@ const { activateLoginSchema } = require("./employee.validation");
 const { upload } = require("../../config/cloudinary");
 const { uploadDocumentSchema } = require("./employee.validation");
 
+const bulkImportController = require("./employeeBulkImport.controller")
+const bulkExportController = require("./employeeBulkExport.controller")
+const templateController = require("./employeeTemplate.controller")
 
 router.get("/me", authenticate, employeeController.getMyProfile);
+
+// ── Excel Template Download ──────────────────────────────────────────────────
+router.get(
+  "/template",
+  authenticate,
+  checkPermission("employee.read"),
+  templateController.downloadTemplate
+)
+
+// ── Get Dropdown Data ────────────────────────────────────────────────────────
+router.get(
+  "/dropdown-data",
+  authenticate,
+  checkPermission("employee.read"),
+  templateController.getDropdownData
+)
+
+// ── Bulk Import from Excel ───────────────────────────────────────────────────
+router.post(
+  "/bulk-import-excel",
+  authenticate,
+  checkPermission("employee.create"),
+  upload.single('file'),
+  templateController.bulkImportFromExcel
+)
+
+// ── Bulk Import from JSON ────────────────────────────────────────────────────
+router.post(
+  "/bulk-import",
+  authenticate,
+  checkPermission("employee.create"),
+  bulkImportController.bulkImportEmployees
+);
+
+// ── Bulk Export ─────────────────────────────────────────────────────────────
+router.get(
+  "/export",
+  authenticate,
+  checkPermission("employee.read"),
+  bulkExportController.exportEmployees
+);
 
 // E-08 — Apna profile update karo (sirf phone, address, emergencyContact, profilePhoto)
 router.put(

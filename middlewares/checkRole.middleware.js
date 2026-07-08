@@ -45,8 +45,10 @@ exports.checkRole = (...allowedRoles) => {
 
     // SUPER_ADMIN — har jagah allowed
     if (userRole === "SUPER_ADMIN") return next();
+    
+    console.log(`[ROLE CHECK] Required: [${allowedRoles.join(', ')}], User role: ${userRole}, Match: ${allowedRoles.includes(userRole)}`);
 
-    // Exact role match
+    // Exact role match (including array of roles)
     if (allowedRoles.includes(userRole)) return next();
 
     // Hierarchy check — sirf tab jab ek hi role specify kiya ho

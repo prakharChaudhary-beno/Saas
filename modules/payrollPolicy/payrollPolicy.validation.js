@@ -76,7 +76,117 @@ const overtimePaySchema = Joi.object({
   enabled:          Joi.boolean().default(false),
   rateMultiplier:   Joi.number().min(1).max(5).default(1.5),
   capHoursPerMonth: Joi.number().min(0).allow(null).default(null),
-  payableComponent: Joi.string().trim().default("BASIC"),
+  payableComponent: Joi.string().trim().default('BASIC'),
+});
+
+// ─── TDS Configuration ────────────────────────────────────────────────────────
+const tdsConfigSchema = Joi.object({
+  enabled: Joi.boolean().default(true),
+  taxRegime: Joi.string().valid('old', 'new').default('new'),
+  standardDeduction: Joi.number().min(0).default(50000),
+  professionalTaxExempt: Joi.boolean().default(true),
+  hraExemptionMethod: Joi.string().valid('actual', 'standard', 'none').default('actual'),
+  newRegimeRebate: Joi.boolean().default(true),
+  newRegimeSurcharge: Joi.boolean().default(true),
+  educationCessRate: Joi.number().min(0).max(100).default(4),
+  surchargeSlabs: Joi.array().items(
+    Joi.object({
+      minIncome: Joi.number().min(0).default(0),
+      maxIncome: Joi.number().min(0).allow(null).default(null),
+      rate: Joi.number().min(0).max(100).default(0),
+    })
+  ).optional(),
+});
+
+// ─── Investment Configuration ──────────────────────────────────────────────────
+const investmentConfigSchema = Joi.object({
+  enabled: Joi.boolean().default(true),
+  max80C: Joi.number().min(0).default(150000),
+  max80CCD: Joi.number().min(0).default(50000),
+  max80D: Joi.number().min(0).default(75000),
+  max80E: Joi.number().min(0).allow(null).default(null),
+  max80EEA: Joi.number().min(0).default(150000),
+  max80TTA: Joi.number().min(0).default(10000),
+  max80G: Joi.number().min(0).allow(null).default(null),
+  max80EEB: Joi.number().min(0).default(50000),
+  max80DD: Joi.number().min(0).default(75000),
+  max80DDB: Joi.number().min(0).default(40000),
+  max80U: Joi.number().min(0).default(75000),
+  submissionDeadline: Joi.string().default('01-15'),
+  proofDeadline: Joi.string().default('02-15'),
+});
+
+// ─── Tax Compliance (enhanced) ─────────────────────────────────────────────────
+const taxComplianceSchemaEnhanced = Joi.object({
+  tdsEnabled: Joi.boolean().default(true),
+  tdsSurchargeEnabled: Joi.boolean().default(false),
+  pfEnabled: Joi.boolean().default(true),
+  pfEmployeeRate: Joi.number().min(0).max(100).default(12),
+  pfEmployerRate: Joi.number().min(0).max(100).default(12),
+  pfCeilingAmount: Joi.number().min(0).default(15000),
+  pfApplyOnActualBasic: Joi.boolean().default(false),
+  esiEnabled: Joi.boolean().default(true),
+  esiEmployeeRate: Joi.number().min(0).max(100).default(0.75),
+  esiEmployerRate: Joi.number().min(0).max(100).default(3.25),
+  esiWageCeiling: Joi.number().min(0).default(21000),
+  ptEnabled: Joi.boolean().default(false),
+  ptState: Joi.string().allow('').default(''),
+  ptSlabs: Joi.array().items(
+    Joi.object({
+      minGross: Joi.number().min(0).default(0),
+      maxGross: Joi.number().min(0).allow(null).default(null),
+      monthlyAmount: Joi.number().min(0).default(0),
+    })
+  ).optional(),
+  lwfEnabled: Joi.boolean().default(false),
+  lwfState: Joi.string().allow(null, '').default(null),
+  lwfEmployeeRate: Joi.number().min(0).allow(null).default(0),
+  lwfEmployerRate: Joi.number().min(0).allow(null).default(0),
+  gratuityEnabled: Joi.boolean().default(false),
+  gratuityRate: Joi.number().min(0).max(100).default(4.81),
+});
+
+// ─── Salary Structure Component ───────────────────────────────────────────────
+const salaryComponentSchema = Joi.object({
+  code: Joi.string().required(),
+  name: Joi.string().required(),
+  type: Joi.string().valid('FIXED', 'PERCENTAGE', 'FORMULA').default('FIXED'),
+  value: Joi.number().min(0).default(0),
+  percentage: Joi.number().min(0).max(100).default(0),
+  baseComponent: Joi.string().optional(),
+  formula: Joi.string().optional(),
+  taxable: Joi.boolean().default(true),
+  pfApplicable: Joi.boolean().default(false),
+  esiApplicable: Joi.boolean().default(false),
+  ptApplicable: Joi.boolean().default(false),
+  order: Joi.number().default(0),
+});
+
+// ─── Reimbursement Component ─────────────────────────────────────────────────
+const reimbursementSchema = Joi.object({
+  code: Joi.string().required(),
+  name: Joi.string().required(),
+  monthlyLimit: Joi.number().min(0).default(0),
+  taxExempt: Joi.boolean().default(true),
+  requireProof: Joi.boolean().default(true),
+  rollover: Joi.boolean().default(false),
+});
+
+// ─── Variable Pay Component ───────────────────────────────────────────────────
+const variablePaySchema = Joi.object({
+  code: Joi.string().required(),
+  name: Joi.string().required(),
+  frequency: Joi.string().valid('MONTHLY', 'QUARTERLY', 'ANNUAL').default('ANNUAL'),
+  percentageOfCTC: Joi.number().min(0).max(100).default(0),
+  payoutMonths: Joi.array().items(Joi.number().min(1).max(12)).optional(),
+  linkedToPerformance: Joi.boolean().default(true),
+});
+
+// ─── Salary Structure Schema ──────────────────────────────────────────────────
+const salaryStructureSchema = Joi.object({
+  fixedComponents: Joi.array().items(salaryComponentSchema).optional(),
+  reimbursements: Joi.array().items(reimbursementSchema).optional(),
+  variablePay: Joi.array().items(variablePaySchema).optional(),
 });
 
 // ─── Pro-Rata ─────────────────────────────────────────────────────────────────
@@ -156,8 +266,13 @@ const createPolicySchema = Joi.object({
   overtimePay:       overtimePaySchema.optional(),
   proRata:           proRataSchema.optional(),
   payslipConfig:     payslipConfigSchema.optional(),
-  taxCompliance:     taxComplianceSchema.optional(),
+  taxCompliance:     taxComplianceSchemaEnhanced.optional(),
   arrear:            arrearSchema.optional(),
+
+  // Enterprise Payroll Features
+  tdsConfig:         tdsConfigSchema.optional(),
+  investmentConfig:  investmentConfigSchema.optional(),
+  salaryStructure:   salaryStructureSchema.optional(),
 });
 
 // ─── Update Schema (all top-level fields optional) ────────────────────────────

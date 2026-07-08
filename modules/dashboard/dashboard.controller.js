@@ -30,6 +30,15 @@ exports.getUnitDashboard = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ─── Manager Dashboard ────────────────────────────────────────────────────────
+// GET /api/v1/dashboard/manager?month=YYYY-MM
+exports.getManagerDashboard = async (req, res, next) => {
+  try {
+    const data = await dashboardService.getManagerDashboard(req.user, req.query);
+    res.status(200).json({ success: true, message: "Manager dashboard fetched", data });
+  } catch (err) { next(err); }
+};
+
 // ─── Employee Self-Service Dashboard ──────────────────────────────────────────
 // GET /api/v1/dashboard/employee?month=YYYY-MM
 exports.getEmployeeDashboard = async (req, res, next) => {

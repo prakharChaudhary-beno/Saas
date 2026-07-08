@@ -93,6 +93,29 @@ exports.getMySummary = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /hrms/attendance/team (Manager only)
+// Manager sees attendance of employees reporting to them
+// ─────────────────────────────────────────────────────────────────────────────
+exports.getTeamAttendance = async (req, res, next) => {
+  try {
+    const result = await attendanceService.getTeamAttendance(req.query, req.user);
+
+    return res.status(200).json({
+      success:    true,
+      message:    "Team attendance fetched",
+      data:       result.records,
+      pagination: {
+        page:  result.page,
+        limit: result.limit,
+        total: result.total,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /hrms/attendance?month=&employeeId=&status=  (HR only)
 // HR sab employees ki attendance dekhta hai
 // ─────────────────────────────────────────────────────────────────────────────

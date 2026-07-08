@@ -1,10 +1,16 @@
 // modules/leave/leave.service.js
-// UPDATED — tenantId → org_id + company_id + unit_id
+// REFACTORED — Dynamic Leave Management (Policy-Driven)
+// Leave balances are calculated in REAL-TIME from Active Leave Policy
+// No seeding, no initialization, no permanent balance storage
 
-const LeaveBalance = require("./models/leaveBalance.models");
+const LeavePolicy  = require("../leavePolicy/models/leavePolicy.model");
 const LeaveType    = require("./models/leaveType.models");
+const LeaveRequest = require("./models/leaveRequest.models");
 const Employee     = require("../employee/models/employee.model");
 const AppError     = require("../../utils/appError");
+const mongoose     = require("mongoose");
+
+const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
 // ── Scope filter ──────────────────────────────────────────
 const buildScopeFilter = (user) => {
@@ -21,6 +27,208 @@ const buildCompanyFilter = (user) => {
   const filter = { org_id: user.orgId };
   if (user.companyId) filter.company_id = user.companyId;
   return filter;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DYNAMIC LEAVE BALANCE CALCULATOR
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get active leave policy for an employee
+ */
+const getActiveLeavePolicy = async (org_id, company_id, unit_id) => {
+  console.log("[LEAVE POLICY] Looking for policy - org:", org_id, "company:", company_id, "unit:", unit_id);
+  
+  // Try unit-specific policy first
+  if (unit_id) {
+    const unitPolicy = await LeavePolicy.findOne({
+      org_id,
+      company_id,
+      unit_id: toObjId(unit_id),
+      status: "active",
+      isDeleted: { $ne: true }, // Match false, null, or undefined
+    });
+    
+    if (unitPolicy) {
+      console.log("[LEAVE POLICY] Found UNIT policy:", unitPolicy.name, "with", unitPolicy.leaveTypes?.length, "leave types");
+      console.log("[LEAVE POLICY] Unit leave types:", unitPolicy.leaveTypes?.map(lt => ({ name: lt.name, code: lt.code, active: lt.isActive })));
+      return unitPolicy;
+    }
+    console.log("[LEAVE POLICY] No unit policy found for unit_id:", unit_id);
+  }
+
+  // Fallback to company-level policy (unit_id: null)
+  console.log("[LEAVE POLICY] FALLING BACK to company policy...");
+  const companyPolicy = await LeavePolicy.findOne({
+    org_id,
+    company_id,
+    unit_id: null,
+    status: "active",
+    isDeleted: { $ne: true }, // Match false, null, or undefined
+  });
+
+  if (companyPolicy) {
+    console.log("[LEAVE POLICY] Found COMPANY policy:", companyPolicy.name, "with", companyPolicy.leaveTypes?.length, "leave types");
+    console.log("[LEAVE POLICY] Company leave types:", companyPolicy.leaveTypes?.map(lt => ({ name: lt.name, code: lt.code, active: lt.isActive })));
+  }
+
+  return companyPolicy;
+};
+
+/**
+ * Calculate leave usage from approved/pending leave requests
+ */
+const calculateLeaveUsage = async (employeeId, leaveTypeId, year) => {
+  const startOfYear = new Date(year, 0, 1);
+  const endOfYear = new Date(year, 11, 31, 23, 59, 59);
+
+  // APPROVED leaves = used
+  // FIX: Use $totalDays (not numberOfDays), fix date range for cross-year leaves
+  const usedAgg = await LeaveRequest.aggregate([
+    {
+      $match: {
+        employeeId: toObjId(employeeId),
+        leaveTypeId: toObjId(leaveTypeId),
+        status: "APPROVED",
+        startDate: { $lte: endOfYear },  // Started before end of year
+        endDate: { $gte: startOfYear },   // Ends after start of year
+        isDeleted: false,
+      },
+    },
+    { $group: { _id: null, totalDays: { $sum: "$totalDays" } } },
+  ]);
+
+  // PENDING leaves = pending
+  const pendingAgg = await LeaveRequest.aggregate([
+    {
+      $match: {
+        employeeId: toObjId(employeeId),
+        leaveTypeId: toObjId(leaveTypeId),
+        status: "PENDING",
+        startDate: { $lte: endOfYear },  // Started before end of year
+        endDate: { $gte: startOfYear },   // Ends after start of year
+        isDeleted: false,
+      },
+    },
+    { $group: { _id: null, totalDays: { $sum: "$totalDays" } } },
+  ]);
+
+  return {
+    used: usedAgg[0]?.totalDays || 0,
+    pending: pendingAgg[0]?.totalDays || 0,
+  };
+};
+
+/**
+ * Calculate dynamic leave balances for an employee
+ * Source of truth: Active Leave Policy
+ */
+const calculateDynamicLeaveBalances = async (employeeId, year) => {
+  const targetYear = year || new Date().getFullYear();
+
+  const employee = await Employee.findById(employeeId)
+    .select("name employeeId org_id company_id unit_id status")
+    .populate("unit_id", "name");
+
+  if (!employee) throw new AppError("Employee not found", 404);
+
+  // Get active leave policy
+  const activePolicy = await getActiveLeavePolicy(
+    employee.org_id,
+    employee.company_id,
+    employee.unit_id?._id || employee.unit_id
+  );
+
+  if (!activePolicy) {
+    return {
+      employee: {
+        id: employee._id,
+        name: employee.name,
+        employeeId: employee.employeeId,
+      },
+      policy: null,
+      balances: [],
+      summary: {
+        totalLeaveTypes: 0,
+        totalAllocated: 0,
+        totalUsed: 0,
+        totalPending: 0,
+        totalRemaining: 0,
+      },
+    };
+  }
+
+  // Build balances from policy leave types
+  const balances = [];
+  let totalAllocated = 0;
+  let totalUsed = 0;
+  let totalPending = 0;
+  let totalRemaining = 0;
+
+  for (const plt of activePolicy.leaveTypes) {
+    if (!plt.isActive) continue;
+
+    const leaveTypeId = plt.leaveTypeId || null;
+    const leaveType = leaveTypeId
+      ? await LeaveType.findById(leaveTypeId).select("name code isPaid colorCode isHalfDayAllowed")
+      : null;
+
+    const allocated = plt.credit?.totalPerYear || 0;
+    const usage = leaveTypeId
+      ? await calculateLeaveUsage(employeeId, leaveTypeId, targetYear)
+      : { used: 0, pending: 0 };
+
+    const remaining = Math.max(0, allocated - usage.used - usage.pending);
+
+    // Prefer policy leave type name (plt.name), fallback to master catalog (leaveType.name)
+    const leaveTypeName = plt.name || leaveType?.name || plt.code || "Unknown Leave";
+
+    console.log(`[LEAVE BALANCE] Leave type: ${leaveTypeName}, code: ${plt.code}, allocated: ${allocated}, used: ${usage.used}, pending: ${usage.pending}`);
+
+    balances.push({
+      leaveTypeId: {
+        _id: leaveTypeId || plt._id,
+        name: leaveTypeName,
+        code: plt.code,
+        colorCode: plt.color || leaveType?.colorCode || "#6B7280",
+        isPaid: plt.isPaid ?? leaveType?.isPaid ?? true,
+        isHalfDayAllowed: plt.isHalfDayAllowed ?? leaveType?.isHalfDayAllowed ?? true,
+      },
+      allocated,
+      used: usage.used,
+      pending: usage.pending,
+      remaining,
+      policyName: activePolicy.name,
+    });
+
+    totalAllocated += allocated;
+    totalUsed += usage.used;
+    totalPending += usage.pending;
+    totalRemaining += remaining;
+  }
+
+  return {
+    employee: {
+      id: employee._id,
+      name: employee.name,
+      employeeId: employee.employeeId,
+      unit: employee.unit_id,
+    },
+    policy: {
+      id: activePolicy._id,
+      name: activePolicy.name,
+      version: activePolicy.version,
+    },
+    year: targetYear,
+    balances,
+    summary: {
+      totalLeaveTypes: balances.length,
+      totalAllocated,
+      totalUsed,
+      totalPending,
+      totalRemaining,
+    },
+  };
 };
 
 // ─── CREATE LEAVE TYPE ────────────────────────────────────
@@ -145,181 +353,121 @@ exports.toggleStatus = async (id, user) => {
 };
 
 // ─── INITIALIZE LEAVE BALANCE ─────────────────────────────
+// DEPRECATED — Balances are now calculated dynamically from policy
+// Keeping for backward compatibility but returns calculated balance
 exports.initializeLeaveBalance = async (body, user) => {
-  const {
-    employeeId,
-    leaveTypeId,
-    year          = new Date().getFullYear(),
-    totalAllocated = null,
-  } = body;
+  const { employeeId, year = new Date().getFullYear() } = body;
 
-  // Employee check — unit scope
-  const employee = await Employee.findOne({
-    _id:        employeeId,
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    isDeleted:  false,
-  }).select("name employeeId status unit_id");
-
-  if (!employee) throw new AppError("Employee not found", 404);
-
-  if (employee.status === "TERMINATED") {
-    throw new AppError(`Cannot initialize balance for terminated employee: ${employee.name}`, 400);
-  }
-
-  // LeaveType check — company scope
-  const leaveType = await LeaveType.findOne({
-    _id:        leaveTypeId,
-    company_id: user.companyId,
-    isActive:   true,
-  }).select("name code defaultDaysPerYear isPaid");
-
-  if (!leaveType) throw new AppError("Leave type not found or inactive", 404);
-
-  // Duplicate check
-  const existing = await LeaveBalance.findOne({
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    employeeId,
-    leaveTypeId,
-    year,
-  });
-
-  if (existing) {
-    throw new AppError(
-      `Leave balance for "${leaveType.name}" already initialized for ${employee.name} in ${year}.`,
-      400
-    );
-  }
-
-  const allocated = totalAllocated !== null ? totalAllocated : (leaveType.defaultDaysPerYear || 0);
-
-  const balance = await LeaveBalance.create({
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    unit_id:    employee.unit_id || null,
-    employeeId,
-    leaveTypeId,
-    year,
-    totalAllocated: allocated,
-    used:           0,
-    pending:        0,
-    remaining:      allocated,
-    adjustmentHistory: [{
-      days:       allocated,
-      reason:     `Initial balance set for ${year}`,
-      adjustedBy: user.userId,
-      type:       "YEAR_INITIALIZATION",
-    }],
-  });
-
-  await balance.populate("leaveTypeId", "name code");
-  await balance.populate("employeeId",  "name employeeId");
-  return balance;
-};
-
-// ─── GET LEAVE BALANCES ───────────────────────────────────
-exports.getLeaveBalances = async (employeeId, query, user) => {
-  const year = query.year || new Date().getFullYear();
-
-  const employee = await Employee.findOne({
-    _id:        employeeId,
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    isDeleted:  false,
-  }).select("name employeeId");
-
-  if (!employee) throw new AppError("Employee not found", 404);
-
-  const balances = await LeaveBalance.find({
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    employeeId,
-    year,
-  })
-    .populate("leaveTypeId", "name code isPaid isHalfDayAllowed")
-    .select("-adjustmentHistory -__v")
-    .sort({ createdAt: 1 });
-
+  // Return dynamic calculation instead
+  const result = await calculateDynamicLeaveBalances(employeeId, year);
   return {
-    employee: { id: employee._id, name: employee.name, employeeId: employee.employeeId },
-    year,
-    balances,
-    summary: {
-      totalLeaveTypes: balances.length,
-      totalAllocated:  balances.reduce((s, b) => s + (b.totalAllocated || 0), 0),
-      totalUsed:       balances.reduce((s, b) => s + b.used, 0),
-      totalRemaining:  balances.reduce((s, b) => s + b.remaining, 0),
-      totalPending:    balances.reduce((s, b) => s + b.pending, 0),
-    },
+    message: "Leave balances are now calculated dynamically from active policy",
+    data: result,
   };
 };
 
-// ─── GET MY LEAVE BALANCES ────────────────────────────────
+// ─── GET LEAVE BALANCES (Dynamic Calculation) ───────────────────────────────
+exports.getLeaveBalances = async (employeeId, query, user) => {
+  const year = query.year || new Date().getFullYear();
+
+  // Verify employee access
+  const employee = await Employee.findOne({
+    _id: employeeId,
+    org_id: user.orgId,
+    company_id: user.companyId,
+    isDeleted: false,
+  }).select("_id");
+
+  if (!employee) throw new AppError("Employee not found", 404);
+
+  // Return dynamic calculation
+  return await calculateDynamicLeaveBalances(employeeId, year);
+};
+
+// ─── GET MY LEAVE BALANCES (Dynamic Calculation) ────────────────────────────────
 exports.getMyLeaveBalances = async (query, user) => {
   const year = query.year || new Date().getFullYear();
 
   const employee = await Employee.findOne({
-    userId:     user.userId,
-    org_id:     user.orgId,
+    userId: user.userId,
+    org_id: user.orgId,
     company_id: user.companyId,
-    isDeleted:  false,
-  }).select("name employeeId");
+    isDeleted: false,
+  }).select("_id");
 
   if (!employee) throw new AppError("Employee record not found for your account", 404);
 
-  const balances = await LeaveBalance.find({
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    employeeId: employee._id,
-    year,
-  })
-    .populate("leaveTypeId", "name code isPaid isHalfDayAllowed")
-    .select("-adjustmentHistory -__v")
-    .sort({ createdAt: 1 });
-
-  return {
-    employee: { id: employee._id, name: employee.name, employeeId: employee.employeeId },
-    year,
-    balances,
-    summary: {
-      totalLeaveTypes: balances.length,
-      totalAllocated:  balances.reduce((s, b) => s + (b.totalAllocated || 0), 0),
-      totalUsed:       balances.reduce((s, b) => s + b.used, 0),
-      totalRemaining:  balances.reduce((s, b) => s + b.remaining, 0),
-      totalPending:    balances.reduce((s, b) => s + b.pending, 0),
-    },
-  };
+  // Return dynamic calculation
+  return await calculateDynamicLeaveBalances(employee._id, year);
 };
 
 // ─── ADJUST LEAVE BALANCE ─────────────────────────────────
+// DEPRECATED — Balances are now calculated dynamically
+// Manual adjustments should be handled via LeaveAdjustment model if needed
 exports.adjustLeaveBalance = async (balanceId, body, user) => {
-  const { days, reason } = body;
+  throw new AppError(
+    "Leave balance adjustments are deprecated. Balances are now calculated dynamically from the active leave policy. To modify allocations, update the policy instead.",
+    400
+  );
+};
 
-  const balance = await LeaveBalance.findOne({
-    _id:        balanceId,
-    org_id:     user.orgId,
+// ═══════════════════════════════════════════════════════════════════════════
+// AVAILABLE LEAVE TYPES (From Active Policy)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── GET AVAILABLE LEAVE TYPES FOR EMPLOYEE (From Policy) ────────────────────────
+exports.getAvailableLeaveTypes = async (user) => {
+  const employee = await Employee.findOne({
+    userId: user.userId,
+    org_id: user.orgId,
     company_id: user.companyId,
-  })
-    .populate("leaveTypeId", "name code")
-    .populate("employeeId",  "name employeeId");
+    isDeleted: false,
+  }).select("unit_id");
 
-  if (!balance) throw new AppError("Leave balance record not found", 404);
+  if (!employee) throw new AppError("Employee record not found", 404);
 
-  if (days < 0 && Math.abs(days) > balance.remaining) {
-    throw new AppError(
-      `Cannot debit ${Math.abs(days)} days. Current remaining: ${balance.remaining} days.`,
-      400
-    );
+  const activePolicy = await getActiveLeavePolicy(
+    user.orgId,
+    user.companyId,
+    employee.unit_id
+  );
+
+  if (!activePolicy) return [];
+
+  const leaveTypes = [];
+  for (const plt of activePolicy.leaveTypes) {
+    if (!plt.isActive) continue;
+
+    const leaveType = plt.leaveTypeId
+      ? await LeaveType.findById(plt.leaveTypeId).select("name code colorCode isPaid isHalfDayAllowed")
+      : null;
+
+    leaveTypes.push({
+      _id: plt.leaveTypeId || plt._id,
+      code: plt.code,
+      name: plt.name || leaveType?.name,
+      isPaid: plt.isPaid ?? leaveType?.isPaid ?? true,
+      colorCode: leaveType?.colorCode || "#6B7280",
+      isHalfDayAllowed: leaveType?.isHalfDayAllowed ?? true,
+      totalPerYear: plt.credit?.totalPerYear || 0,
+    });
   }
 
-  const type = days > 0 ? "MANUAL_CREDIT" : "MANUAL_DEBIT";
-
-  balance.totalAllocated = Math.max(0, balance.totalAllocated + days);
-  balance.adjustmentHistory.push({ days, reason, adjustedBy: user.userId, type });
-  await balance.save();
-  return balance;
+  return leaveTypes;
 };
+
+// ─── GET ALL LEAVE TYPES FOR HR (Master Catalog) ────────────────────────
+exports.getAllLeaveTypesForHR = async (user) => {
+  return await LeaveType.find({
+    ...buildCompanyFilter(user),
+    isDeleted: false,
+  }).sort({ isSystem: -1, name: 1 });
+};
+
+// Export helper for use in other modules
+exports.calculateDynamicLeaveBalances = calculateDynamicLeaveBalances;
+exports.getActiveLeavePolicy = getActiveLeavePolicy;
+exports.calculateLeaveUsage = calculateLeaveUsage;
 // ─── TEAM LEAVE CALENDAR ──────────────────────────────────────
 // GET /leave/calendar?month=YYYY-MM&unit_id=&department_id=
 //
@@ -333,10 +481,6 @@ exports.adjustLeaveBalance = async (balanceId, body, user) => {
 //   - department_id filter optional
 //   - Response includes dailySummary for frontend grid
 //   - Only APPROVED leaves shown (not pending/draft)
-
-const LeaveRequest = require("./models/leaveRequest.models");
-const mongoose     = require("mongoose");
-const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
 const fmtDateStr = (d) => {
   if (!d) return "";

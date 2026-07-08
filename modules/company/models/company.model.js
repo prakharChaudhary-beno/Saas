@@ -116,6 +116,26 @@ const companySchema = new mongoose.Schema(
       default: null,
     },
 
+    // Industry type
+    industry: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    // Alias fields for frontend compatibility
+    pf_registration: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
+    esic_registration: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
     // ─── Address ──────────────────────────────────────────────
     address: {
       country: { type: String },

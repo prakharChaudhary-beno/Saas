@@ -536,6 +536,8 @@ exports.getMySummary = async (query, user) => {
 exports.getAllAttendance = async (query, user) => {
   const {
     month,
+    startDate,
+    endDate,
     employeeId,
     status,
     page  = 1,
@@ -545,9 +547,26 @@ exports.getAllAttendance = async (query, user) => {
   const filter = { org_id: user.orgId, company_id: user.companyId };
   if (user.unitId) filter.unit_id = user.unitId;
 
-  if (month) {
+  // Date range handling
+  if (startDate && endDate) {
+    // Use custom date range if provided
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    
+    filter.date = { $gte: start, $lte: end };
+  } else if (month) {
+    // Fallback to month if no date range
     const { start, end } = parseMonth(month);
     filter.date = { $gte: start, $lt: end };
+  } else {
+    // Default to current month if nothing provided
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    filter.date = { $gte: start, $lte: end };
   }
 
   if (employeeId) filter.employeeId = employeeId;
@@ -564,6 +583,155 @@ exports.getAllAttendance = async (query, user) => {
       .select("-__v -isDeleted"),
     Attendance.countDocuments(filter),
   ]);
+
+  return {
+    page:    Number(page),
+    limit:   Number(limit),
+    total,
+    records,
+  };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET TEAM ATTENDANCE (Manager)
+// GET /hrms/attendance/team?month=YYYY-MM&employeeId=&status=
+// Manager sees attendance of employees reporting to them
+// ─────────────────────────────────────────────────────────────────────────────
+
+exports.getTeamAttendance = async (query, user) => {
+  const {
+    month,
+    startDate,
+    endDate,
+    employeeId,
+    status,
+    page  = 1,
+    limit = 31,
+  } = query;
+
+  // ── 1. Get manager's employee record ─────────────────────────────────────
+  const manager = await Employee.findOne({
+    userId:    user.userId,
+    org_id:    user.orgId,
+    status:    "ACTIVE",
+    isDeleted: false,
+  }).select("_id");
+
+  if (!manager) {
+    throw new AppError("Manager employee record not found", 404);
+  }
+
+  // ── 2. Get team members (direct reports) ──────────────────────────────────
+  const teamMembers = await Employee.find({
+    reportingManagerId: manager._id,
+    org_id:             user.orgId,
+    company_id:         user.companyId,
+    status:             "ACTIVE",
+    isDeleted:          false,
+  }).select("_id");
+
+  const teamIds = [manager._id, ...teamMembers.map(e => e._id)];
+
+  // ── 3. Build filter ───────────────────────────────────────────────────────
+  const filter = {
+    org_id:     user.orgId,
+    company_id: user.companyId,
+    employeeId: { $in: teamIds },
+  };
+
+  // Date range handling
+  if (startDate && endDate) {
+    // Use custom date range if provided
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    
+    filter.date = { $gte: start, $lte: end };
+  } else if (month) {
+    // Fallback to month if no date range
+    const { start, end } = parseMonth(month);
+    filter.date = { $gte: start, $lt: end };
+  } else {
+    // Default to current month if nothing provided
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    filter.date = { $gte: start, $lte: end };
+  }
+
+  if (employeeId) filter.employeeId = employeeId;
+  if (status)     filter.status     = status;
+
+  const skip = (page - 1) * limit;
+
+  const [records, total] = await Promise.all([
+    Attendance.find(filter)
+      .populate("employeeId", "name employeeId departmentId")
+      .sort({ date: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .select("-__v -isDeleted"),
+    Attendance.countDocuments(filter),
+  ]);
+
+  // ── If filtering by single day (today/yesterday), show ALL team members ────────
+  // If no records exist for an employee on a working day, mark as ABSENT
+  if (startDate && endDate && startDate === endDate) {
+    const filterStart = new Date(startDate);
+    filterStart.setHours(0, 0, 0, 0);
+    const filterEnd = new Date(endDate);
+    filterEnd.setHours(23, 59, 59, 999);
+    
+    // Check if it's a single day filter
+    const isSingleDay = filterStart.getTime() === filterEnd.getTime() || 
+                        (filterEnd - filterStart) === 86399999;
+    
+    if (isSingleDay) {
+      const dayOfWeek = filterStart.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      
+      // If not a weekend, find employees without attendance records
+      if (!isWeekend) {
+        // Get all team members with full details
+        const allTeamMembers = await Employee.find({
+          _id: { $in: teamIds },
+          org_id: user.orgId,
+          company_id: user.companyId,
+          status: "ACTIVE",
+          isDeleted: false,
+        }).select("_id name employeeId departmentId");
+        
+        // Find which employees already have attendance records
+        const employeesWithRecords = new Set(records.map(r => r.employeeId?._id?.toString() || r.employeeId?.toString()));
+        
+        // Create ABSENT records for missing employees
+        const absentRecords = allTeamMembers
+          .filter(emp => !employeesWithRecords.has(emp._id.toString()))
+          .map(emp => ({
+            _id: `absent-${emp._id}`,
+            employeeId: emp,
+            date: filterStart,
+            status: 'ABSENT',
+            checkIn: null,
+            checkOut: null,
+            workingHours: 0,
+            isWFH: false,
+            remarks: 'Auto-marked absent (no attendance record)',
+            isAutoMarked: true,
+          }));
+        
+        // Combine existing records with absent records
+        return {
+          page: Number(page),
+          limit: Number(limit),
+          total: records.length + absentRecords.length,
+          records: [...records, ...absentRecords],
+        };
+      }
+    }
+  }
 
   return {
     page:    Number(page),

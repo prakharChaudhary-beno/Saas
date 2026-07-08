@@ -8,9 +8,16 @@ const validate           = require("../../middlewares/validate.middleware");
 const { createPolicySchema, updatePolicySchema } = require("./payrollPolicy.validation");
 const ctrl               = require("./payrollPolicy.controller");
 const runCtrl            = require("./payrollRun.controller");
+const historyCtrl        = require("./payrollHistory.controller");
 
 // ── Global guards ─────────────────────────────────────────────────────────────
 router.use(authenticate, checkTrial);
+
+// ── Metadata endpoints (must come before /:id routes) ───────────────────────
+router.get("/meta/pt-states", ctrl.getPTStates);
+
+// ── Payroll History (aggregated by month) ─────────────────────────────────────
+router.get("/history", checkRole("hr_manager"), historyCtrl.getPayrollHistory);
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 router.post(  "/",    checkRole("hr_manager"),   validate(createPolicySchema), ctrl.createPolicy);

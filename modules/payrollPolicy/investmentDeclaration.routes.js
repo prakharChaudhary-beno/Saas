@@ -5,7 +5,7 @@ const express = require("express");
 const router = express.Router();
 
 const { authenticate } = require("../../middlewares/auth.middleware");
-const { checkRole } = require("../../middlewares/checkRole.middleware");
+const checkPermission = require("../../middlewares/permission.middleware");
 const checkTrial = require("../../middlewares/checkTrial.middleware");
 const validate = require("../../middlewares/validate.middleware");
 const investmentDeclarationService = require("./investmentDeclaration.service");
@@ -225,7 +225,7 @@ router.post("/proof",
 // ─── HR/Admin Routes ─────────────────────────────────────────────────────────
 // Get all declarations for review (HR view)
 router.get("/all",
-  checkRole("hr_manager"),
+  checkPermission("investment_declaration.read"),
   async (req, res, next) => {
     try {
       // Read unitId from query params (frontend) or user object (fallback)
@@ -252,7 +252,7 @@ router.get("/all",
 
 // HR reviews and approves/rejects declaration
 router.patch("/review/:declarationId",
-  checkRole("hr_manager"),
+  checkPermission("investment_declaration.update"),
   validate(reviewDeclarationSchema),
   async (req, res, next) => {
     try {
@@ -274,7 +274,7 @@ router.patch("/review/:declarationId",
 
 // Lock declaration after approval
 router.post("/lock/:declarationId",
-  checkRole("hr_manager"),
+  checkPermission("investment_declaration.update"),
   async (req, res, next) => {
     try {
       const result = await investmentDeclarationService.lockDeclaration(

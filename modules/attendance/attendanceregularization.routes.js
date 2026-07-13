@@ -1,7 +1,7 @@
 "use strict";
 const express    = require("express");
 const router     = express.Router();
-const ctrl       = require("./attendanceRegularization.controller");
+const ctrl       = require("./attendanceregularization.controller");
 const { authenticate } = require("../../middlewares/auth.middleware");
 const checkPermission  = require("../../middlewares/permission.middleware");
 

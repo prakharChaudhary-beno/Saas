@@ -303,7 +303,14 @@ exports.getUnitDashboard = async (user, query = {}) => {
   let unitId, companyId;
 
   if (["org_admin", "company_admin", "unit_admin", "hr_manager"].includes(user.role)) {
-    unitId = query.unitId || user.unitId;
+    // unit_admin / hr_manager can only ever see their OWN unit — the query
+    // param is ignored for them so they can't browse another unit's dashboard.
+    // Only org_admin / company_admin (who already have broader company/org
+    // scope) may pick an arbitrary unitId, and it's still validated below
+    // against their own org/company.
+    unitId = ["unit_admin", "hr_manager"].includes(user.role)
+      ? user.unitId
+      : (query.unitId || user.unitId);
     console.log('[getUnitDashboard] Role allowed, resolved unitId:', unitId);
 
     const unitFilter = {

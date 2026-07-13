@@ -11,6 +11,23 @@ const policyVersionService = require("../policyVersion/policyVersion.service");
 
 const POLICY_TYPE = "ATTENDANCE";
 
+// ─── Scope filter — Unit Level Isolation ───────────────────────────────────────
+// Enterprise HRMS: strict unit-level data isolation for policies
+// - SUPER_ADMIN sees all
+// - Org Admin sees all in org
+// - Company Admin sees all in company
+// - Unit Admin sees ONLY their unit's policies (unit_id: user.unitId)
+const buildFilter = (user) => {
+  if (user.role === "SUPER_ADMIN") return {};
+  
+  const filter = { org_id: user.orgId };
+  
+  if (user.companyId) filter.company_id = user.companyId;
+  if (user.unitId) filter.unit_id = user.unitId;
+  
+  return filter;
+};
+
 // ─── Create Policy ────────────────────────────────────────────────────────────
 exports.createPolicy = async (body, user) => {
 
@@ -80,7 +97,8 @@ exports.createPolicy = async (body, user) => {
 
 // ─── Get All Policies ─────────────────────────────────────────────────────────
 exports.getPolicies = async (user, query = {}) => {
-  const filter = { org_id: user.orgId, company_id: user.companyId };
+  // Enterprise: Use strict scope filter
+  const filter = { ...buildFilter(user) };
 
   if (query.status) filter.status = query.status;
 
@@ -115,11 +133,10 @@ exports.getPolicies = async (user, query = {}) => {
 
 // ─── Get Policy By ID ─────────────────────────────────────────────────────────
 exports.getPolicyById = async (id, user) => {
+  // Enterprise: Use strict scope filter
   const policy = await AttendancePolicy.findOne({
-    _id:      id,
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    unit_id:    user.unitId || null,
+    _id: id,
+    ...buildFilter(user)
   })
     .populate("applicableFor.departments",  "name")
     .populate("applicableFor.designations", "name")
@@ -132,13 +149,12 @@ exports.getPolicyById = async (id, user) => {
 
 // ─── Update Policy ────────────────────────────────────────────────────────────
 exports.updatePolicy = async (id, body, user) => {
+  // Enterprise: Use strict scope filter
   const policy = await AttendancePolicy.findOne({
-    _id:      id,
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    unit_id:    user.unitId || null,
+    _id: id,
+    ...buildFilter(user)
   });
-
+  
   if (!policy) throw new AppError("Attendance policy not found", 404);
 
   if (policy.status === "archived") {
@@ -184,7 +200,8 @@ exports.updatePolicy = async (id, body, user) => {
 };
 // ─── Activate Policy ──────────────────────────────────────────────────────────
 exports.activatePolicy = async (id, user) => {
-  const policy = await AttendancePolicy.findOne({ _id: id, org_id: user.orgId, company_id: user.companyId });
+  // Enterprise: Use strict scope filter
+  const policy = await AttendancePolicy.findOne({ _id: id, ...buildFilter(user) });
   if (!policy) throw new AppError("Attendance policy not found", 404);
   if (policy.status === "active")   throw new AppError("Policy is already active", 400);
   if (policy.status === "archived") throw new AppError("Cannot activate an archived policy", 400);
@@ -208,7 +225,8 @@ exports.activatePolicy = async (id, user) => {
 
 // ─── Deactivate Policy ────────────────────────────────────────────────────────
 exports.deactivatePolicy = async (id, user) => {
-  const policy = await AttendancePolicy.findOne({ _id: id, org_id: user.orgId, company_id: user.companyId });
+  // Enterprise: Use strict scope filter
+  const policy = await AttendancePolicy.findOne({ _id: id, ...buildFilter(user) });
   if (!policy) throw new AppError("Attendance policy not found", 404);
   if (policy.status === "inactive") throw new AppError("Policy is already inactive", 400);
   if (policy.status === "archived") throw new AppError("Cannot deactivate an archived policy", 400);
@@ -233,7 +251,8 @@ exports.deactivatePolicy = async (id, user) => {
 
 // ─── Archive Policy ───────────────────────────────────────────────────────────
 exports.archivePolicy = async (id, user) => {
-  const policy = await AttendancePolicy.findOne({ _id: id, org_id: user.orgId, company_id: user.companyId });
+  // Enterprise: Use strict scope filter
+  const policy = await AttendancePolicy.findOne({ _id: id, ...buildFilter(user) });
   if (!policy) throw new AppError("Attendance policy not found", 404);
   if (policy.status === "archived") throw new AppError("Policy is already archived", 400);
 
@@ -256,7 +275,8 @@ exports.archivePolicy = async (id, user) => {
 
 // ─── Delete Policy ────────────────────────────────────────────────────────────
 exports.deletePolicy = async (id, user) => {
-  const policy = await AttendancePolicy.findOne({ _id: id, org_id: user.orgId, company_id: user.companyId });
+  // Enterprise: Use strict scope filter
+  const policy = await AttendancePolicy.findOne({ _id: id, ...buildFilter(user) });
   if (!policy) throw new AppError("Attendance policy not found", 404);
   if (policy.status === "active") {
     throw new AppError("Cannot delete an active policy. Archive it first.", 400);
@@ -275,7 +295,8 @@ exports.deletePolicy = async (id, user) => {
 
 // ─── GET VERSION HISTORY ──────────────────────────────────────────────────
 exports.getVersionHistory = async (id, user) => {
-  const policy = await AttendancePolicy.findOne({ _id: id, org_id: user.orgId, company_id: user.companyId }).select("_id name version");
+  // Enterprise: Use strict scope filter
+  const policy = await AttendancePolicy.findOne({ _id: id, ...buildFilter(user) }).select("_id name version");
   if (!policy) throw new AppError("Attendance policy not found", 404);
 
   const history = await policyVersionService.getVersionHistory(POLICY_TYPE, id, user);
@@ -290,7 +311,7 @@ exports.getVersionHistory = async (id, user) => {
 
 // ─── GET ONE VERSION SNAPSHOT ──────────────────────────────────────────────
 exports.getVersionSnapshot = async (id, version, user) => {
-  const policy = await AttendancePolicy.findOne({ _id: id, org_id: user.orgId, company_id: user.companyId }).select("_id name");
+  const policy = await AttendancePolicy.findOne({ _id: id, ...buildFilter(user) }).select("_id name");
   if (!policy) throw new AppError("Attendance policy not found", 404);
 
   return await policyVersionService.getVersionSnapshot(POLICY_TYPE, id, version, user);
@@ -298,7 +319,8 @@ exports.getVersionSnapshot = async (id, version, user) => {
 
 // ─── RESTORE A PREVIOUS VERSION ────────────────────────────────────────────
 exports.restoreVersion = async (id, version, user) => {
-  const policy = await AttendancePolicy.findOne({ _id: id, org_id: user.orgId, company_id: user.companyId });
+  // Enterprise: Use strict scope filter
+  const policy = await AttendancePolicy.findOne({ _id: id, ...buildFilter(user) });
   if (!policy) throw new AppError("Attendance policy not found", 404);
   if (policy.status === "archived") {
     throw new AppError("Cannot restore an archived policy. Activate or unarchive first.", 400);

@@ -1,4 +1,5 @@
 // modules/role/role.route.js
+// Access Control routes - ADMIN ONLY (org_admin, company_admin, unit_admin)
 
 const express        = require("express");
 const router         = express.Router();
@@ -7,10 +8,28 @@ const { authenticate }  = require("../../middlewares/auth.middleware");
 const checkPermission   = require("../../middlewares/permission.middleware");
 const { validateRole, validateRoleUpdate }  = require("../../validations/auth.validations");
 
+// ── Admin check middleware ─────────────────────────────────────
+// Only admins (org_admin, company_admin, unit_admin) can access role management
+const requireAdmin = (req, res, next) => {
+  const adminRoles = ['org_admin', 'company_admin', 'unit_admin', 'SUPER_ADMIN', 'product_admin'];
+  const userRole = req.user?.role || req.user?.roleSlug;
+  
+  if (!adminRoles.includes(userRole)) {
+    return res.status(403).json({
+      success: false,
+      code: "ADMIN_ONLY",
+      message: "Access Control is only available for administrators",
+    });
+  }
+  next();
+};
+
+// ── All role routes require authentication + admin check ────────
+router.use(authenticate, requireAdmin);
+
 // ── Specific routes PEHLE — /:id se pehle hone chahiye ──────
 router.get(
   "/assignable-permissions",
-  authenticate,
   checkPermission("role.read"),
   roleController.getAssignablePermissions
 );
@@ -18,7 +37,6 @@ router.get(
 // ── CRUD ─────────────────────────────────────────────────────
 router.post(
   "/",
-  authenticate,
   checkPermission("role.create"),
   validateRole,
   roleController.createRole
@@ -26,21 +44,18 @@ router.post(
 
 router.get(
   "/",
-  authenticate,
   checkPermission("role.read"),
   roleController.getRoles
 );
 
 router.get(
   "/:id",
-  authenticate,
   checkPermission("role.read"),
   roleController.getRoleById
 );
 
 router.put(
   "/:id",
-  authenticate,
   checkPermission("role.update"),
   validateRoleUpdate,
   roleController.updateRole
@@ -48,7 +63,6 @@ router.put(
 
 router.delete(
   "/:id",
-  authenticate,
   checkPermission("role.delete"),
   roleController.deleteRole
 );
@@ -57,7 +71,6 @@ router.delete(
 // PUT /roles/:id/modules → update which modules role can access
 router.put(
   "/:id/modules",
-  authenticate,
   checkPermission("role.update"),
   roleController.updateRoleModules
 );

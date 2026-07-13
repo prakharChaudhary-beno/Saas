@@ -188,7 +188,10 @@ exports.getEmployees = async (user, query) => {
   if (designationId)  filter.designationId  = designationId;
   if (employmentType) filter.employmentType = employmentType;
   if (status)         filter.status         = status;
-  if (unit_id)        filter.unit_id        = unit_id;
+  
+  // Enterprise Data Isolation: Only allow unit_id override if user has NO unitId
+  // Unit admins cannot query other units' employees
+  if (unit_id && !user.unitId) filter.unit_id = unit_id;
 
   if (search) {
     filter.$or = [

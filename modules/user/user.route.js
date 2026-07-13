@@ -1,14 +1,15 @@
 // modules/user/user.route.js
 //
-// Task 3.1 — checkRole middleware
-// Task 3.5 — invite, getUsers, updateUser, deleteUser, progression
+// UPDATED — Dynamic permission-based access control
+// Permission slugs: employee.read, employee.create, employee.update, employee.delete
 
 const express    = require("express");
 const router     = express.Router();
 
 const controller                       = require("./user.controller");
 const { authenticate }                 = require("../../middlewares/auth.middleware");
-const { checkRole, requireTenantUser } = require("../../middlewares/checkRole.middleware");
+const { requireTenantUser }            = require("../../middlewares/checkRole.middleware");
+const checkPermission                  = require("../../middlewares/permission.middleware");
 const validate                         = require("../../middlewares/validate.middleware");
 const { inviteUserSchema, updateUserSchema } = require("./user.validation");
 
@@ -17,44 +18,47 @@ router.use(authenticate);
 router.use(requireTenantUser);
 
 // ── POST /users/invite ────────────────────────────────────────
-// hr_manager + upar wale invite kar sakte hain
+// Requires: employee.create permission
 router.post(
   "/invite",
-  checkRole("hr_manager"),
+  checkPermission("employee.create"),
   validate(inviteUserSchema),
   controller.inviteUser
 );
 
 // ── GET /users ────────────────────────────────────────────────
+// Requires: employee.read permission
 // Filters: ?page=1&limit=10&search=&status=&roleId=&departmentId=
 router.get(
   "/",
-  checkRole("hr_manager"),
+  checkPermission("user.read"),
   controller.getUsers
 );
 
 // ── GET /users/:id/progression ────────────────────────────────
+// Requires: employee.read permission
 // IMPORTANT: /progression pehle register karo — /:id se match ho jaata hai
 router.get(
   "/:id/progression",
-  checkRole("hr_manager"),
+  checkPermission("employee.read"),
   controller.getProgressionHistory
 );
 
 // ── PUT /users/:id ────────────────────────────────────────────
+// Requires: employee.update permission
 // Updatable: roleId, status, name, lastName, phone, departmentId, note
 router.put(
   "/:id",
-  checkRole("hr_manager"),
+  checkPermission("employee.update"),
   validate(updateUserSchema),
   controller.updateUser
 );
 
 // ── DELETE /users/:id ─────────────────────────────────────────
-// Sirf tenant_admin delete kar sakta hai
+// Requires: employee.delete permission
 router.delete(
   "/:id",
-  checkRole("unit_admin"),  // ← tenant_admin → unit_admin
+  checkPermission("employee.delete"),
   controller.deleteUser
 );
 

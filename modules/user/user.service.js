@@ -288,6 +288,7 @@ exports.inviteUser = async (data, currentUser) => {
 // ─────────────────────────────────────────────────────────────
 // GET USERS
 // GET /users?page=1&limit=10&search=&status=&roleId=&departmentId=
+// Returns users based on caller's level, EXCLUDING employees
 // ─────────────────────────────────────────────────────────────
 exports.getUsers = async (query, currentUser) => {
   const { page = 1, limit = 10, search, status, roleId, departmentId } = query;
@@ -297,19 +298,50 @@ exports.getUsers = async (query, currentUser) => {
     is_deleted: false,
   };
 
+  // ── LEVEL-BASED FILTERING: Exclude employees from admin users list ──
+  const Role = require("../role/role.model");
+  
+  // Find the employee role to exclude
+  const employeeRole = await Role.findOne({ slug: "employee" }).select("_id").lean();
+  
+  // Exclude employee role from results - employees are managed separately
+  if (employeeRole) {
+    filter.roleId = { $ne: employeeRole._id };
+  }
+
   // T-25 — Filter by role type (Administrative/Privilege/General)
   if (query.roleType) {
-    const Role = require("../role/role.model");
     const matchingRoles = await Role.find({
       userClass: query.roleType,
       isDeleted: false,
     }).select("_id");
-    filter.roleId = { $in: matchingRoles.map(r => r._id) };
+    
+    // Combine with employee exclusion
+    const matchingRoleIds = matchingRoles.map(r => r._id);
+    if (employeeRole) {
+      filter.roleId = { 
+        $in: matchingRoleIds,
+        $ne: employeeRole._id 
+      };
+    } else {
+      filter.roleId = { $in: matchingRoleIds };
+    }
   }
 
   if (search) filter.email  = { $regex: search, $options: "i" };
   if (status) filter.status = status;
-  if (roleId) filter.roleId = roleId;
+  
+  // Specific roleId filter - but still exclude employee
+  if (roleId) {
+    if (employeeRole && roleId === employeeRole._id.toString()) {
+      // If trying to filter by employee role, return empty
+      return {
+        users: [],
+        pagination: { total: 0, page: Number(page), limit: Number(limit), pages: 0 }
+      };
+    }
+    filter.roleId = roleId;
+  }
 
   // departmentId — Employee model se matching userIds
   if (departmentId) {

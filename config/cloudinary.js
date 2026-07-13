@@ -29,6 +29,17 @@ const storage = new CloudinaryStorage({
       }
     }
 
+    // Check if it's organization logo
+    if (req.path.includes('/organization/logo') || req.baseUrl.includes('/organization')) {
+      return {
+        folder: 'hrms/organizations/logos',
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+        resource_type: 'image',
+        transformation: [{ width: 500, height: 500, crop: 'limit' }], // Resize limit
+        public_id: `org-${req.user?.orgId || 'unknown'}-${Date.now()}`
+      }
+    }
+
     // Default for employee documents
     return {
       folder: `hrms/employees/${req.params.id}/documents`,

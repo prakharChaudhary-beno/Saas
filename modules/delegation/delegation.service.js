@@ -278,6 +278,33 @@ exports.createDelegation = async (payload, user) => {
     // Non-fatal
   }
 
+  // ── In-App Notification to Delegatee ──
+  // Matrix Requirement: Permission delegated to you (🔔+📧) Priority: 🟡 Important
+  try {
+    const sendNotification = require("../../utils/sendNotification");
+    await sendNotification({
+      type:          "DELEGATION_RECEIVED",
+      userId:        delegatee_id,
+      org_id:        user.orgId,
+      unit_id:       targetUnitId,
+      referenceId:   delegation._id,
+      referenceType: "Delegation",
+      data: {
+        delegatorName: user.name,
+        permissions:   permDocs.map((p) => p.label || p.slug).join(", "),
+        startDate:     fmtDate(start),
+        endDate:       fmtDate(end),
+        reason,
+        delegationId:  delegation._id.toString(),
+      },
+      inApp:  true,
+      push:   false  // Important, not critical
+    });
+    console.log(`[createDelegation] ✅ In-app notification sent to delegatee: ${delegatee_id}`);
+  } catch (notifErr) {
+    console.error(`[createDelegation] ⚠️ Notification failed:`, notifErr.message);
+  }
+
   return delegation;
 };
 
@@ -436,6 +463,31 @@ exports.revokeDelegation = async (id, payload, user) => {
       });
     }
   } catch (_) {}
+
+  // ── In-App Notification to Delegatee ──
+  // Matrix Requirement: Delegation revoked (🔔) Priority: 🟢 Informational
+  try {
+    const sendNotification = require("../../utils/sendNotification");
+    await sendNotification({
+      type:          "DELEGATION_REVOKED",
+      userId:        delegation.delegatee_id,
+      org_id:        delegation.org_id,
+      unit_id:       delegation.unit_id,
+      referenceId:   delegation._id,
+      referenceType: "Delegation",
+      data: {
+        delegatorName: user.name,
+        permissions:   delegation.permissionSlugs?.join(", ") || "",
+        reason,
+        delegationId:  delegation._id.toString(),
+      },
+      inApp:  true,
+      push:   false  // Informational only
+    });
+    console.log(`[revokeDelegation] ✅ In-app notification sent to delegatee: ${delegation.delegatee_id}`);
+  } catch (notifErr) {
+    console.error(`[revokeDelegation] ⚠️ Notification failed:`, notifErr.message);
+  }
 
   return { message: "Delegation revoked successfully", delegation };
 };

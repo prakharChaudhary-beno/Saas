@@ -104,7 +104,14 @@ exports.getPolicies = async (query, user) => {
 
   if (status) filter.status = status;
   if (enabled !== undefined) filter.enabled = enabled === "true";
-  if (unit_id) filter.unit_id = toObjId(unit_id);
+  
+  // Enterprise Unit Isolation: Unit admins see only their unit's policies
+  // Only allow unit_id override if user has NO unitId (org/company admins)
+  if (unit_id && !user.unitId) {
+    filter.unit_id = toObjId(unit_id);
+  } else if (user.unitId) {
+    filter.unit_id = toObjId(user.unitId);
+  }
 
   const skip = (Number(page) - 1) * Number(limit);
 
@@ -131,11 +138,17 @@ exports.getPolicies = async (query, user) => {
 
 // ─── GET POLICY BY ID ────────────────────────────────────────────
 exports.getPolicyById = async (policyId, user) => {
-  const policy = await RegularisationPolicy.findOne({
+  // Enterprise Unit Isolation: Add unit_id filter
+  const filter = {
     _id: toObjId(policyId),
     org_id: toObjId(user.orgId),
+    company_id: toObjId(user.companyId),
     isDeleted: false,
-  })
+  };
+  
+  if (user.unitId) filter.unit_id = toObjId(user.unitId);
+  
+  const policy = await RegularisationPolicy.findOne(filter)
     .populate("unit_id", "name")
     .populate("applicableFor.departments", "name")
     .populate("applicableFor.designations", "name")
@@ -153,11 +166,17 @@ exports.getPolicyById = async (policyId, user) => {
 
 // ─── UPDATE POLICY ──────────────────────────────────────────────
 exports.updatePolicy = async (policyId, payload, user) => {
-  const policy = await RegularisationPolicy.findOne({
+  // Enterprise Unit Isolation: Add unit_id filter
+  const filter = {
     _id: toObjId(policyId),
     org_id: toObjId(user.orgId),
+    company_id: toObjId(user.companyId),
     isDeleted: false,
-  });
+  };
+  
+  if (user.unitId) filter.unit_id = toObjId(user.unitId);
+  
+  const policy = await RegularisationPolicy.findOne(filter);
 
   if (!policy) {
     throw new AppError("Policy not found", 404);
@@ -237,11 +256,17 @@ exports.updatePolicy = async (policyId, payload, user) => {
 
 // ─── DELETE POLICY ──────────────────────────────────────────────
 exports.deletePolicy = async (policyId, user) => {
-  const policy = await RegularisationPolicy.findOne({
+  // Enterprise Unit Isolation: Add unit_id filter
+  const filter = {
     _id: toObjId(policyId),
     org_id: toObjId(user.orgId),
+    company_id: toObjId(user.companyId),
     isDeleted: false,
-  });
+  };
+  
+  if (user.unitId) filter.unit_id = toObjId(user.unitId);
+  
+  const policy = await RegularisationPolicy.findOne(filter);
 
   if (!policy) {
     throw new AppError("Policy not found", 404);
@@ -258,11 +283,17 @@ exports.deletePolicy = async (policyId, user) => {
 
 // ─── TOGGLE POLICY STATUS ────────────────────────────────────────
 exports.togglePolicy = async (policyId, user) => {
-  const policy = await RegularisationPolicy.findOne({
+  // Enterprise Unit Isolation: Add unit_id filter
+  const filter = {
     _id: toObjId(policyId),
     org_id: toObjId(user.orgId),
+    company_id: toObjId(user.companyId),
     isDeleted: false,
-  });
+  };
+  
+  if (user.unitId) filter.unit_id = toObjId(user.unitId);
+  
+  const policy = await RegularisationPolicy.findOne(filter);
 
   if (!policy) {
     throw new AppError("Policy not found", 404);

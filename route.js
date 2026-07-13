@@ -14,6 +14,7 @@ const mfaRoutes         = require("./modules/auth/MFA/auth.mfa.routes");
 const leaveRoutes       = require("./modules/leave/leave.route");
 const planRoutes        = require("./modules/plan/plan.route");
 const companyRoutes     = require("./modules/company/company.route");
+const organizationRoutes = require("./modules/organisation/organization.route");
 const lobRoutes         = require("./modules/lob/lob.route");
 const unitRoutes        = require("./modules/unit/unit.route");
 const holidayRoutes     = require("./modules/holiday/holiday.route");
@@ -37,6 +38,7 @@ const companyConfigRoutes    = require("./modules/companyConfig/companyConfig.ro
 const leaveTypeRoutes        = require("./modules/leave/leave.type.route");
 const payslipRoutes               = require("./modules/payrollPolicy/payslip/payslip.routes");
 const investmentDeclarationRoutes  = require("./modules/payrollPolicy/investmentDeclaration.routes");
+const moduleRoutes           = require("./modules/module/module.routes");
 
 // ── New modules (Prompt 11-15) ─────────────────────────────────────────────
 const shiftRoutes      = require("./modules/shift/shift.routes");
@@ -53,6 +55,7 @@ router.use("/roles",        roleRoutes);
 router.use("/permissions",  permissionRoutes);
 router.use("/plans",        planRoutes);
 router.use("/companies",    companyRoutes);
+router.use("/organization", organizationRoutes);
 router.use("/lobs",         lobRoutes);
 router.use("/units",        unitRoutes);
 router.use("/departments",  departmentRoutes);
@@ -86,6 +89,7 @@ router.use("/dashboard",           dashboardRoutes);
 router.use("/company-config",      companyConfigRoutes);
 router.use("/payslips",            payslipRoutes);
 router.use("/investment-declarations", investmentDeclarationRoutes);
+router.use("/modules",          moduleRoutes);
 
 // ── New routes ─────────────────────────────────────────────────────────────
 router.use("/shifts",       shiftRoutes);

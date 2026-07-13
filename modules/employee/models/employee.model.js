@@ -102,7 +102,9 @@ about: {
     street:  { type: String },
     city:    { type: String },
     state:   { type: String },
+    stateCode: { type: String, uppercase: true, default: null },
     country: { type: String },
+    countryCode: { type: String, uppercase: true, default: null },
     pincode: { type: String }
   },
 
@@ -110,8 +112,20 @@ about: {
     street:  { type: String },
     city:    { type: String },
     state:   { type: String },
+    stateCode: { type: String, uppercase: true, default: null },
     country: { type: String },
+    countryCode: { type: String, uppercase: true, default: null },
     pincode: { type: String }
+  },
+
+  // ─── Normalized Location for Policy Matching ──────
+  // Used by payroll/attendance/leave policy resolution
+  location: {
+    city:       { type: String, trim: true, default: null },
+    state:      { type: String, trim: true, default: null },
+    stateCode:  { type: String, uppercase: true, default: null },
+    country:    { type: String, trim: true, default: null },
+    countryCode:{ type: String, uppercase: true, default: null }
   },
 
   // ─── Job Info ─────────────────────────────────────
@@ -212,5 +226,22 @@ employeeSchema.index({ org_id: 1, company_id: 1, email: 1 },      { unique: true
 employeeSchema.index({ org_id: 1, company_id: 1, status: 1 });
 employeeSchema.index({ unit_id: 1, isDeleted: 1 });
 employeeSchema.index({ company_id: 1, departmentId: 1 });
+employeeSchema.index({ 'location.stateCode': 1 });
+employeeSchema.index({ 'location.city': 1 });
+
+// ─── Pre-save Hook: Auto-populate location from currentAddress ────────
+employeeSchema.pre('save', async function() {
+  // Normalize location from currentAddress for policy matching
+  if (this.currentAddress) {
+    this.location = {
+      city:        this.currentAddress.city || null,
+      state:       this.currentAddress.state || null,
+      stateCode:   this.currentAddress.stateCode || null,
+      country:     this.currentAddress.country || null,
+      countryCode: this.currentAddress.countryCode || null
+    }
+  }
+  // No next() needed for async hooks
+})
 
 module.exports = mongoose.model("Employee", employeeSchema);

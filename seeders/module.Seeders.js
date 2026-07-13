@@ -28,6 +28,16 @@ const modules = [
     description: "Salary structure, pay runs, payslips, TDS/PF/ESI",
   },
   {
+    slug: "shift",
+    name: "Shift & Roster",
+    description: "Shift scheduling, roster management, shift swaps",
+  },
+  {
+    slug: "holiday",
+    name: "Holiday Calendar",
+    description: "Company holidays, regional holidays, holiday policies",
+  },
+  {
     slug: "organisation",
     name: "Organisation Setup",
     description: "Org structure, companies, LOBs, units, departments",
@@ -36,6 +46,21 @@ const modules = [
     slug: "auth",
     name: "Auth and Access Control",
     description: "RBAC, roles, permissions, SSO, 2FA, user management",
+  },
+  {
+    slug: "role",
+    name: "Roles & Permissions",
+    description: "RBAC configuration, permission assignment, access control",
+  },
+  {
+    slug: "department",
+    name: "Department Management",
+    description: "Department structure, hierarchy, and organization",
+  },
+  {
+    slug: "designation",
+    name: "Designation Management",
+    description: "Job designations, roles, and career progression",
   },
   // T-04 — Additional modules
   {

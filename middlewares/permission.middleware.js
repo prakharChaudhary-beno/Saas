@@ -31,6 +31,7 @@ const PLATFORM_MODULES = [
   "leavePolicy", "attendancePolicy", "payrollPolicy",
   "shift", "roster", "delegation", "notification", "auditLog",
   "attendance", "leave", "payroll", "employee",
+  "investment_declaration", "leave_type",
 ];
 
 
@@ -148,14 +149,14 @@ module.exports = (requiredPermission) => {
       // ═══════════════════════════════════════════════════════════
       // LAYER 3 — Role permission check
       // ═══════════════════════════════════════════════════════════
-      const role = await Role.findById(req.user.roleId);
+      const role = await Role.findById(req.user.roleId).populate("permissions");
 
       if (!role) {
         return res.status(403).json({ success: false, message: "Role not found" });
       }
 
       // Wildcard — full access (org_admin etc.)
-      if (role.permissions.includes("*")) return next();
+      if (role.permissions.some(p => (p.slug || p.toString()) === "*")) return next();
 
       // Slug-based lookup (fast, indexed)
       let permission = await Permission.findOne({ slug: requiredPermission, is_active: true });
@@ -172,9 +173,11 @@ module.exports = (requiredPermission) => {
         });
       }
 
-      const hasPermission = role.permissions.some(
-        (p) => p.toString() === permission._id.toString()
-      );
+      // Handle both populated objects and ObjectId references
+      const hasPermission = role.permissions.some((p) => {
+        const permId = p._id || p;
+        return permId.toString() === permission._id.toString();
+      });
 
       if (!hasPermission) {
         // ── DELEGATION CHECK ───────────────────────────────────

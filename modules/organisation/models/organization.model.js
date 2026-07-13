@@ -70,11 +70,36 @@ const organizationSchema = new mongoose.Schema(
       default: null,
     },
 
+    // ─── Address (Optional) ───────────────────────────────────
     address: {
-      country: { type: String },
-      state:   { type: String },
-      city:    { type: String },
-      pincode: { type: String },
+      country:  { type: String, default: null },
+      state:    { type: String, default: null },
+      city:     { type: String, default: null },
+      pincode:  { type: String, default: null },
+      street:   { type: String, default: null },
+    },
+
+    // ─── Organization-wide Settings (Optional) ───────────────
+    // Can be overridden at company level if needed
+    timezone: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+
+    currency: {
+      type: String,
+      default: null,
+      uppercase: true,
+      trim: true,
+      maxlength: 3,
+    },
+
+    fiscalYearStart: {
+      type: Number,
+      default: null,
+      min: 1,
+      max: 12,
     },
 
     // ─── Status ───────────────────────────────────────────────
@@ -115,7 +140,7 @@ organizationSchema.pre("save", function (next) {
       .replace(/\s+/g, "-")
       .replace(/-+/g, "-");
   }
-//   next();
+  next();
 });
 
 module.exports = mongoose.model("Organization", organizationSchema);

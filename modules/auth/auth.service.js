@@ -21,6 +21,7 @@ const MODULE_MAP = {
                   "payrollPolicy", "subscription", "plan"],
   shift:         ["shift", "roster"],
   roster:        ["shift", "roster"],
+  shift_roster:  ["shift", "roster"],
   delegation:    ["delegation"],
   audit_trail:   ["auditLog", "audit"],
   notifications: ["notification"],

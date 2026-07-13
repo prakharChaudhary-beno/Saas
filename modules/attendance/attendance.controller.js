@@ -8,7 +8,8 @@ const attendanceService = require("./attendance.service");
 // ─────────────────────────────────────────────────────────────────────────────
 exports.punchIn = async (req, res, next) => {
   try {
-    const record = await attendanceService.punchIn(req.body, req.user);
+    // Pass req object for IP-based location capture
+    const record = await attendanceService.punchIn(req.body, req.user, req);
 
     return res.status(201).json({
       success: true,

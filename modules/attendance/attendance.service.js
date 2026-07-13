@@ -81,9 +81,95 @@ const getEmployee = async (userId, org_id, company_id, unit_id) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const Unit = require("../unit/models/unit.model")
-const { validateGeoRadius } = require("../../utils/locationConstants")
+const { validateGeoRadius, getIPLocation, reverseGeocode } = require("../../utils/locationConstants")
+const geoip = require('geoip-lite')
 
-exports.punchIn = async (data, user) => {
+// ─── Location Capture & Validation (Backend-Side) ──────────────────────────────
+/**
+ * Captures employee location with multiple fallback strategies:
+ * 1. Frontend-provided GPS coordinates (most accurate)
+ * 2. IP-based geolocation (using geoip-lite)
+ * 3. Estimated location from employee's unit default
+ */
+const captureEmployeeLocation = async (req, unitId, employeeId) => {
+  let locationData = {
+    latitude: null,
+    longitude: null,
+    accuracy: null,
+    source: 'unknown',
+    message: ''
+  }
+
+  console.log(`[GeoLocation] === Starting location capture ===`)
+  console.log(`[GeoLocation] Employee: ${employeeId}`)
+  console.log(`[GeoLocation] Request body:`, req?.body?.geolocation)
+
+  // Strategy 1: Use frontend-provided GPS coordinates (most accurate)
+  if (req?.body?.geolocation?.latitude && req?.body?.geolocation?.longitude) {
+    locationData = {
+      latitude: req.body.geolocation.latitude,
+      longitude: req.body.geolocation.longitude,
+      accuracy: req.body.geolocation.accuracy || 10,
+      source: 'gps',
+      message: 'Location captured from device GPS'
+    }
+    console.log(`[GeoLocation] ✓ Using frontend GPS: lat=${locationData.latitude}, lng=${locationData.longitude}, accuracy=${locationData.accuracy}m`)
+    return locationData
+  }
+
+  // Strategy 2: IP-based geolocation (backend-side)
+  const clientIP = req?.ip || req?.headers?.['x-forwarded-for']?.split(',')[0]?.trim() || req?.connection?.remoteAddress
+  console.log(`[GeoLocation] Client IP: ${clientIP}`)
+  
+  // Check if localhost - in development, allow fallback to unit coordinates
+  const isLocalhost = !clientIP || clientIP === '::1' || clientIP === '127.0.0.1' || clientIP === '::ffff:127.0.0.1' || clientIP.startsWith('192.168.')
+  
+  if (!isLocalhost) {
+    const geo = geoip.lookup(clientIP)
+    console.log(`[GeoLocation] GeoIP lookup:`, geo ? { lat: geo.ll?.[0], lng: geo.ll?.[1], city: geo.city } : 'null')
+    
+    if (geo?.ll && geo.ll.length === 2) {
+      locationData = {
+        latitude: geo.ll[0],
+        longitude: geo.ll[1],
+        accuracy: 5000,
+        source: 'ip',
+        message: `Location estimated from IP (${clientIP})`,
+        city: geo.city || null,
+        region: geo.region || null,
+        country: geo.country || null
+      }
+      console.log(`[GeoLocation] ✓ Using IP location: lat=${locationData.latitude}, lng=${locationData.longitude}, city=${locationData.city}`)
+      return locationData
+    }
+  } else {
+    console.log(`[GeoLocation] Skipping IP geolocation (localhost/private IP: ${clientIP})`)
+  }
+
+  // Strategy 3: Fallback to unit's default location (for development/testing)
+  if (unitId) {
+    const unit = await Unit.findById(unitId).select('geolocation name').lean()
+    console.log(`[GeoLocation] Unit "${unit?.name}" geolocation:`, unit?.geolocation)
+    
+    if (unit?.geolocation?.latitude && unit?.geolocation?.longitude) {
+      locationData = {
+        latitude: unit.geolocation.latitude,
+        longitude: unit.geolocation.longitude,
+        accuracy: unit.geolocation.radiusMeters || 200,
+        source: 'unit_default',
+        message: `Location defaulted to unit "${unit.name}" coordinates (used for ${isLocalhost ? 'localhost development' : 'fallback'})`
+      }
+      console.log(`[GeoLocation] ✓ Using unit default location: lat=${locationData.latitude}, lng=${locationData.longitude}`)
+      return locationData
+    }
+  }
+
+  locationData.message = 'Location capture failed - no GPS/IP/Unit data available'
+  console.log(`[GeoLocation] ✗ WARNING: ${locationData.message}`)
+  return locationData
+}
+
+exports.punchIn = async (data, user, req = null) => {
   const { isWFH = false, remarks, geolocation } = data
   const now = new Date()
 
@@ -93,26 +179,55 @@ exports.punchIn = async (data, user) => {
   // ── 2. Today ki date (UTC midnight) ──────────────────────────
   const today = toUTCMidnight(now)
 
-  // ── GeoLocation Validation ─────────────────────────────────────
-  // If employee provides geolocation & unit has geoFencing enabled
+  // ── 3. Fetch Unit with geolocation settings ─────────────────────────────
+  const unit = await Unit.findById(user.unitId).select('geolocation locationSettings name').lean()
+  
+  // ── 4. Location Capture (Backend-Side with fallbacks) ─────────────────────
+  // Skip location validation for WFH
+  let capturedLocation = null
   let geoValidation = null
-  if (!isWFH && geolocation?.latitude && geolocation?.longitude) {
-    const unit = await Unit.findById(user.unitId).select('geolocation locationSettings').lean()
+  
+  if (!isWFH) {
+    // Capture location using multiple strategies
+    capturedLocation = await captureEmployeeLocation(req, user.unitId, employee._id)
     
-    if (unit?.geolocation?.latitude && unit?.geolocation?.longitude && unit?.locationSettings?.geoFencingEnabled) {
+    // Validate against unit geofence if configured
+    if (unit?.geolocation?.latitude && unit?.geolocation?.longitude) {
       geoValidation = validateGeoRadius(
-        { latitude: geolocation.latitude, longitude: geolocation.longitude },
+        { latitude: capturedLocation.latitude, longitude: capturedLocation.longitude },
         unit.geolocation
       )
       
-      // Strict blocking if outside radius and requireExactMatch is true
-      if (!geoValidation.isValid && unit.locationSettings.requireExactMatch && !unit.locationSettings.allowOutsidePunch) {
-        throw new AppError(
-          `Outside allowed location. Distance: ${geoValidation.distance}m (Allowed: ${geoValidation.allowedRadius}m)`,
-          403
-        )
+      // Log location validation
+      console.log(`[GeoLocation] Employee: ${employee._id}, Unit: ${unit.name}`)
+      console.log(`[GeoLocation] Captured: lat=${capturedLocation.latitude}, lng=${capturedLocation.longitude}, source=${capturedLocation.source}`)
+      console.log(`[GeoLocation] Distance from unit: ${geoValidation.distance}m (Allowed: ${geoValidation.allowedRadius}m)`)
+      console.log(`[GeoLocation] Valid: ${geoValidation.isValid}, Message: ${geoValidation.message}`)
+      
+      // ── GEO-FENCING ENFORCEMENT ─────────────────────────────
+      // If unit has geoFencingEnabled, enforce strict validation
+      if (unit?.locationSettings?.geoFencingEnabled) {
+        // Strict blocking mode: Employee MUST be within radius
+        if (!geoValidation.isValid && !unit.locationSettings.allowOutsidePunch) {
+          console.log(`[GeoLocation] BLOCKED: Employee outside allowed radius`)
+          throw new AppError(
+            `Punch-in denied. You are outside the allowed location.\n` +
+            `Distance from ${unit.name}: ${geoValidation.distance}m (Allowed: within ${geoValidation.allowedRadius}m)\n` +
+            `Your location: ${capturedLocation.latitude?.toFixed(4)}, ${capturedLocation.longitude?.toFixed(4)}`,
+            403
+          )
+        }
+        
+        // Warning mode (allowOutsidePunch: true): Log but allow
+        if (!geoValidation.isValid && unit.locationSettings.allowOutsidePunch) {
+          console.log(`[GeoLocation] WARNING: Employee outside radius but allowed to punch (allowOutsidePunch=true)`)
+        }
       }
+    } else {
+      console.log(`[GeoLocation] Unit ${unit?.name || user.unitId} has no geolocation configured - validation skipped`)
     }
+  } else {
+    console.log(`[GeoLocation] WFH punch-in - location validation skipped for employee ${employee._id}`)
   }
 
   // ── 3. Already punch-in check ─────────────────────────────────
@@ -280,15 +395,17 @@ exports.punchIn = async (data, user) => {
         isWFH,
         remarks:     remarks || null,
         updatedBy:   user.userId,
-        // Save geolocation if provided
-        ...(geolocation?.latitude && geolocation?.longitude && {
+        // ─── Save Location Data (captured from backend) ─────────────────────────
+        ...(capturedLocation?.latitude && capturedLocation?.longitude && {
           checkInLocation: {
-            latitude: geolocation.latitude,
-            longitude: geolocation.longitude,
-            accuracy: geolocation.accuracy || null,
+            latitude: capturedLocation.latitude,
+            longitude: capturedLocation.longitude,
+            accuracy: capturedLocation.accuracy || null,
             timestamp: now,
             isValid: geoValidation?.isValid ?? null,
-            distance: geoValidation?.distance ?? null
+            distance: geoValidation?.distance ?? null,
+            source: capturedLocation.source || 'unknown',
+            message: capturedLocation.message || ''
           }
         }),
       },

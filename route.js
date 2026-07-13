@@ -21,7 +21,7 @@ const holidayRoutes     = require("./modules/holiday/holiday.route");
 // Yeh add karo route.js mein:
 const attendanceRoutes       = require("./modules/attendance/attendance.routes");
 const regularizationRoutes   = require("./modules/attendance/attendanceregularization.routes");
-const auditLogRoutes         = require("./modules/auditLogs/auditlog.routes");
+const auditLogRoutes         = require("./modules/auditLogs/Auditlog.routes");
 const payrollLockRoutes      = require("./modules/payrollPolicy/payrolllock.routes");
 const notificationRoutes     = require("./modules/notification/notification.routes");
 

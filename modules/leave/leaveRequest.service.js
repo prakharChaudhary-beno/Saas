@@ -4,6 +4,7 @@
 
 "use strict";
 const notifService = require("../notification/notification.service");
+const { sendNotification } = require("../../utils/sendNotification");
 
 const mongoose     = require("mongoose");
 const LeaveRequest = require("./models/leaveRequest.models");
@@ -463,9 +464,9 @@ exports.applyLeave = async (payload, user) => {
     }
   }
 
-  // In-app notification to L1 approver
+  // In-app + Push notification to L1 approver
   if (l1ApproverId) {
-    notifService.createNotification({
+    sendNotification({
       type:          "LEAVE_APPLIED",
       userId:        l1ApproverId,
       org_id:        user.orgId,
@@ -480,6 +481,9 @@ exports.applyLeave = async (payload, user) => {
         totalDays,
         leaveId:      leaveRequest._id,
       },
+      inApp:  true,   // In-app notification
+      email:  false,  // Email already sent above
+      push:   true    // Push notification
     }).catch(() => {});
   }
 
@@ -932,7 +936,10 @@ exports.updateLeaveStatus = async (id, payload, user) => {
   await request.save();
 
   // T-31 — Notify L2 if L1 approved and forwarded
+  // Matrix Requirement: Leave forwarded to L2 (🔔+📧+📱)
   if (request.status === "UNDER_REVIEW" && request.l2ApproverId) {
+    const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name code");
+    
     try {
       const l2Approver = await User.findById(request.l2ApproverId).select("name email");
       if (l2Approver?.email) {
@@ -942,7 +949,7 @@ exports.updateLeaveStatus = async (id, payload, user) => {
           html:    leavePendingTemplate({
             approverName: l2Approver.name || "Manager",
             employeeName: employeeName || "Employee",
-            leaveType:    (await LeaveType.findById(request.leaveTypeId).select("name"))?.name || "Leave",
+            leaveType:    leaveTypeDoc?.name || "Leave",
             startDate:    fmtDate(request.startDate),
             endDate:      fmtDate(request.endDate),
             totalDays:    request.totalDays,
@@ -953,6 +960,30 @@ exports.updateLeaveStatus = async (id, payload, user) => {
     } catch (e) {
       console.error("L2 notification failed:", e.message);
     }
+    
+    // N-32: In-App + Push Notification to L2 when L1 forwards
+    sendNotification({
+      type:          "LEAVE_APPLIED",  // Reuse same type for L2 approval queue
+      userId:        request.l2ApproverId,
+      org_id:        request.org_id,
+      unit_id:       request.unit_id,
+      referenceId:   request._id,
+      referenceType: "LeaveRequest",
+      data: {
+        employeeName: employeeName || "Employee",
+        leaveType:    leaveTypeDoc?.name || "Leave",
+        startDate:    fmtDate(request.startDate),
+        endDate:      fmtDate(request.endDate),
+        totalDays:    request.totalDays,
+        leaveId:      request._id,
+        forwardedBy:  user.name || "L1 Approver",
+      },
+      inApp:  true,   // In-app notification ✓
+      email:  false,  // Email already sent above
+      push:   true    // Push notification ✓
+    }).catch((err) => console.error("[L2 Forward Notification] Failed:", err.message));
+    
+    console.log(`[updateLeaveStatus] ✅ In-app notification sent to L2 ${request.l2ApproverId} for approval`);
   }
 
   // T-31 — Notify employee on final decision
@@ -960,7 +991,7 @@ exports.updateLeaveStatus = async (id, payload, user) => {
   const employeeName  = request.employeeId?.name || "Employee";
 
   if (employeeEmail && ["APPROVED", "REJECTED"].includes(request.status)) {
-    const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name");
+    const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name code");
     const approverUser = await User.findById(user.userId).select("name");
     try {
       await sendEmail({
@@ -988,6 +1019,39 @@ exports.updateLeaveStatus = async (id, payload, user) => {
     } catch (e) {
       console.error("Leave status notification failed:", e.message);
     }
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // N-31: In-App + Push Notification to Employee on Final Decision
+  // Matrix Requirement: Leave approved (🔔+📧), Leave rejected (🔔+📧)
+  // ════════════════════════════════════════════════════════════
+  if (["APPROVED", "REJECTED"].includes(request.status)) {
+    const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name code");
+    const approverUser = await User.findById(user.userId).select("name");
+    
+    sendNotification({
+      type:          request.status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
+      userId:        request.userId,  // Notify the employee
+      org_id:        request.org_id,
+      unit_id:       request.unit_id,
+      referenceId:   request._id,
+      referenceType: "LeaveRequest",
+      data: {
+        employeeName: employeeName,
+        leaveType:    leaveTypeDoc?.name || "Leave",
+        startDate:    fmtDate(request.startDate),
+        endDate:      fmtDate(request.endDate),
+        totalDays:    request.totalDays,
+        approverName: approverUser?.name || "Manager",
+        comment:      remarks || "",
+        leaveId:      request._id,
+      },
+      inApp:  true,   // In-app notification ✓ (matrix requirement)
+      email:  false,  // Email already sent above
+      push:   true    // Push notification (future-ready)
+    }).catch((err) => console.error("[Leave Status Notification] Failed:", err.message));
+    
+    console.log(`[updateLeaveStatus] ✅ In-app notification sent to employee ${request.userId} for ${request.status}`);
   }
 
   return request;
@@ -1091,7 +1155,9 @@ exports.cancelLeaveRequest = async (id, user) => {
     userId:     user.userId,
     org_id:     user.orgId,
     company_id: user.companyId,
-  });
+  }).populate("leaveTypeId", "name code")
+    .populate("l1ApproverId", "name email")
+    .populate("l2ApproverId", "name email");
 
   if (!request) throw new AppError("Leave request not found", 404);
 
@@ -1106,6 +1172,41 @@ exports.cancelLeaveRequest = async (id, user) => {
   await request.save();
 
   // NOTE: Balance updates removed - balances are calculated dynamically from LeaveRequest records
+
+  // ── Notification to Approver(s) ──
+  // Matrix Requirement: Leave cancelled by employee → Approver (🔔) Priority: 🟢 Informational
+  const employee = await Employee.findOne({ userId: user.userId, org_id: user.orgId })
+    .select("name").lean();
+  const leaveTypeName = request.leaveTypeId?.name || "Leave";
+  const notifyApprovers = [];
+
+  if (request.l1ApproverId) notifyApprovers.push(request.l1ApproverId);
+  if (request.l2ApproverId) notifyApprovers.push(request.l2ApproverId);
+
+  for (const approver of notifyApprovers) {
+    if (approver?._id) {
+      sendNotification({
+        type:          "LEAVE_CANCELLED",
+        userId:        approver._id,
+        org_id:        request.org_id,
+        unit_id:       request.unit_id,
+        referenceId:   request._id,
+        referenceType: "LeaveRequest",
+        data: {
+          employeeName: employee?.name || user.name || "Employee",
+          leaveType:    leaveTypeName,
+          startDate:    fmtDate(request.startDate),
+          endDate:      fmtDate(request.endDate),
+          totalDays:    request.totalDays,
+          leaveId:      request._id.toString(),
+        },
+        inApp:  true,
+        push:   false   // Informational only
+      }).catch((err) => console.error("[cancelLeaveRequest] Notification failed:", err.message));
+    }
+  }
+
+  console.log(`[cancelLeaveRequest] ✅ Leave cancelled by ${user.userId}, approvers notified`);
 
   return { message: "Leave request cancelled successfully" };
 };

@@ -80,15 +80,40 @@ const getEmployee = async (userId, org_id, company_id, unit_id) => {
 // POST /hrms/me/attendance/punch-in
 // ─────────────────────────────────────────────────────────────────────────────
 
+const Unit = require("../unit/models/unit.model")
+const { validateGeoRadius } = require("../../utils/locationConstants")
+
 exports.punchIn = async (data, user) => {
-  const { isWFH = false, remarks } = data;
-  const now = new Date();
+  const { isWFH = false, remarks, geolocation } = data
+  const now = new Date()
 
   // ── 1. Get employee ──────────────────────────────────────────
-  const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId);
+  const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId)
 
   // ── 2. Today ki date (UTC midnight) ──────────────────────────
-  const today = toUTCMidnight(now);
+  const today = toUTCMidnight(now)
+
+  // ── GeoLocation Validation ─────────────────────────────────────
+  // If employee provides geolocation & unit has geoFencing enabled
+  let geoValidation = null
+  if (!isWFH && geolocation?.latitude && geolocation?.longitude) {
+    const unit = await Unit.findById(user.unitId).select('geolocation locationSettings').lean()
+    
+    if (unit?.geolocation?.latitude && unit?.geolocation?.longitude && unit?.locationSettings?.geoFencingEnabled) {
+      geoValidation = validateGeoRadius(
+        { latitude: geolocation.latitude, longitude: geolocation.longitude },
+        unit.geolocation
+      )
+      
+      // Strict blocking if outside radius and requireExactMatch is true
+      if (!geoValidation.isValid && unit.locationSettings.requireExactMatch && !unit.locationSettings.allowOutsidePunch) {
+        throw new AppError(
+          `Outside allowed location. Distance: ${geoValidation.distance}m (Allowed: ${geoValidation.allowedRadius}m)`,
+          403
+        )
+      }
+    }
+  }
 
   // ── 3. Already punch-in check ─────────────────────────────────
   const existing = await Attendance.findOne({
@@ -255,6 +280,17 @@ exports.punchIn = async (data, user) => {
         isWFH,
         remarks:     remarks || null,
         updatedBy:   user.userId,
+        // Save geolocation if provided
+        ...(geolocation?.latitude && geolocation?.longitude && {
+          checkInLocation: {
+            latitude: geolocation.latitude,
+            longitude: geolocation.longitude,
+            accuracy: geolocation.accuracy || null,
+            timestamp: now,
+            isValid: geoValidation?.isValid ?? null,
+            distance: geoValidation?.distance ?? null
+          }
+        }),
       },
     },
     { upsert: true, new: true }

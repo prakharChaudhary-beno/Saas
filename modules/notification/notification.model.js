@@ -32,6 +32,13 @@ const notificationSchema = new Schema({
       "REGULARIZATION_APPROVED",
       "REGULARIZATION_REJECTED",
 
+      // Shift Swap
+      "SHIFT_SWAP_REQUESTED",
+      "SHIFT_SWAP_ACCEPTED",
+      "SHIFT_SWAP_DECLINED",
+      "SHIFT_SWAP_APPROVED",
+      "SHIFT_SWAP_REJECTED",
+
       // Payroll
       "PAYSLIP_PUBLISHED",
       "PAYROLL_LOCKED",

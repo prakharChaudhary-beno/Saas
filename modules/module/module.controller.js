@@ -2,7 +2,7 @@
 // Module management controller
 
 const Module = require('./models/module.model');
-const AppError = require('../../../middlewares/error.middleware');
+const AppError = require('../../middlewares/error.middleware');
 
 // GET /modules - Fetch all active modules (Super Admin)
 exports.getAllModules = async (req, res, next) => {

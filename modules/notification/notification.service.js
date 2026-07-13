@@ -16,7 +16,7 @@ const TEMPLATES = {
   LEAVE_APPLIED: (data) => ({
     title:   `Leave Request — ${data.employeeName}`,
     message: `${data.employeeName} has applied for ${data.leaveType} from ${data.startDate} to ${data.endDate} (${data.totalDays} day(s)). Please review.`,
-    actionUrl:   `/leave/requests/${data.leaveId}`,
+    actionUrl:   `/leaves/approval/`,
     actionLabel: "Review Request",
     priority:    "HIGH",
   }),
@@ -24,7 +24,7 @@ const TEMPLATES = {
   LEAVE_APPROVED: (data) => ({
     title:   `Leave Approved ✅`,
     message: `Your ${data.leaveType} from ${data.startDate} to ${data.endDate} has been approved by ${data.approverName}.`,
-    actionUrl:   `/leave/my-requests`,
+    actionUrl:   `/leaves/requests/`,
     actionLabel: "View Leave",
     priority:    "MEDIUM",
   }),
@@ -83,6 +83,47 @@ const TEMPLATES = {
     actionUrl:   `/attendance/regularize/my`,
     actionLabel: "View Request",
     priority:    "MEDIUM",
+  }),
+
+  // Shift Swap Templates
+  SHIFT_SWAP_REQUESTED: (data) => ({
+    title:   `Shift Swap Request 🔄`,
+    message: `${data.requesterName} wants to swap shifts with you on ${data.swapDate}. Their: ${data.requesterShift} ↔ Your: ${data.requestedShift}`,
+    actionUrl:   `/shift-swaps/received`,
+    actionLabel: "Review Request",
+    priority:    "MEDIUM",
+  }),
+
+  SHIFT_SWAP_ACCEPTED: (data) => ({
+    title:   `Shift Swap Accepted ✅`,
+    message: `${data.colleagueName} accepted your shift swap request for ${data.swapDate}. Awaiting manager approval.`,
+    actionUrl:   `/shift-swaps/sent`,
+    actionLabel: "View Status",
+    priority:    "MEDIUM",
+  }),
+
+  SHIFT_SWAP_DECLINED: (data) => ({
+    title:   `Shift Swap Declined ❌`,
+    message: `${data.colleagueName} declined your shift swap request for ${data.swapDate}. ${data.comment ? `Reason: ${data.comment}` : ""}`,
+    actionUrl:   `/shift-swaps/sent`,
+    actionLabel: "View Details",
+    priority:    "MEDIUM",
+  }),
+
+  SHIFT_SWAP_APPROVED: (data) => ({
+    title:   `Shift Swap Approved ✅`,
+    message: `Your shift swap for ${data.swapDate} has been approved by ${data.managerName}. Roster updated.`,
+    actionUrl:   `/shift-swaps/my`,
+    actionLabel: "View Roster",
+    priority:    "HIGH",
+  }),
+
+  SHIFT_SWAP_REJECTED: (data) => ({
+    title:   `Shift Swap Rejected ❌`,
+    message: `Your shift swap for ${data.swapDate} has been rejected. ${data.comment ? `Reason: ${data.comment}` : ""}`,
+    actionUrl:   `/shift-swaps/sent`,
+    actionLabel: "View Details",
+    priority:    "HIGH",
   }),
 
   DELEGATION_RECEIVED: (data) => ({

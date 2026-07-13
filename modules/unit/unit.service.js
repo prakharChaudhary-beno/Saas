@@ -44,6 +44,7 @@ const verifyLobScope = async (lob_id, reqUser) => {
 exports.createUnit = async (payload, reqUser) => {
   const {
     lob_id, name, description, location,
+    geolocation, locationSettings,
     admin_name, admin_email, admin_phone
   } = payload;
  
@@ -81,6 +82,21 @@ exports.createUnit = async (payload, reqUser) => {
       name,
       description: description || "",
       location:    location    || null,
+      // Geolocation fields
+      ...(geolocation && {
+        geolocation: {
+          latitude: geolocation.latitude || null,
+          longitude: geolocation.longitude || null,
+          radiusMeters: geolocation.radiusMeters || 200,
+          address: geolocation.address || {}
+        }
+      }),
+      // Location settings
+      locationSettings: {
+        geoFencingEnabled: locationSettings?.geoFencingEnabled || false,
+        allowOutsidePunch: locationSettings?.allowOutsidePunch || false,
+        requireExactMatch: locationSettings?.requireExactMatch || false
+      },
       created_by:  reqUser.userId,
     }], { session });
 

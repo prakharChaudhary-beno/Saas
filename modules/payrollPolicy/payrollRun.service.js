@@ -138,7 +138,7 @@ if ((esiConfig?.enabled !== false) && grossBeforeLOP < 21000) {
 
   // ── Professional Tax (State-wise) ─────────────────────────────────────────
   const { calculatePT } = require("../../config/ptSlabs");
-  const ptState = policy?.taxCompliance?.ptState || employee?.location?.state || 'KA';
+  const ptState = policy?.taxCompliance?.ptState || employee?.location?.stateCode || employee?.currentAddress?.stateCode || 'KA';
   const professionalTax = calculatePT(ptState, grossSalary);
 
   // ── TDS Calculation (Old/New Regime) ──────────────────────────────────────

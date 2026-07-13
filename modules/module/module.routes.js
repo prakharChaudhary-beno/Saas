@@ -4,10 +4,10 @@
 const express = require('express');
 const router = express.Router();
 const moduleController = require('./module.controller');
-const authMiddleware = require('../../../middlewares/auth.middleware');
+const { authenticate } = require('../../middlewares/auth.middleware');
 
 // All module routes require authentication
-router.use(authMiddleware);
+router.use(authenticate);
 
 // GET /modules - Fetch all modules (Super Admin only for now)
 router.get('/', moduleController.getAllModules);

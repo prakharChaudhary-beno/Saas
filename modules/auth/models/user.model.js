@@ -111,6 +111,31 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
+    // ─── Push Notifications (FCM) ────────────────────────────
+    fcmTokens: [{
+      token: {
+        type: String,
+        required: true
+      },
+      deviceType: {
+        type: String,
+        enum: ["web", "android", "ios"],
+        default: "web"
+      },
+      deviceId: {
+        type: String,
+        default: null
+      },
+      lastUsed: {
+        type: Date,
+        default: Date.now
+      },
+      createdAt: {
+        type: Date,
+        default: Date.now
+      }
+    }],
+
     // ─── Security ─────────────────────────────────────────────
     loginAttempts: {
       type: Number,

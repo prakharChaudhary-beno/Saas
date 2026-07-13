@@ -177,6 +177,46 @@ const recalculateAttendance = async (request, approvedBy) => {
   return attendance;
 };
 
+// ─── Helper: recalculate payroll if a draft payslip already exists ────────────
+// (TC-070 — approving a regularisation can change attendance/LOP for a day that
+// has already been pulled into a payroll draft. If a DRAFT payslip exists for
+// the affected employee + month, re-run payroll so numbers stay accurate.
+// PUBLISHED/PAID payslips are left untouched — those require an explicit
+// re-run via the payroll module once the period is unlocked.)
+const triggerPayrollRecalculation = async (request, approvedBy) => {
+  try {
+    const Payslip           = require("../payrollPolicy/models/payslip.model");
+    const payrollRunService = require("../payrollPolicy/payrollRun.service");
+
+    const date  = new Date(request.date);
+    const year  = date.getUTCFullYear();
+    const month = date.getUTCMonth() + 1;
+
+    const existingPayslip = await Payslip.findOne({
+      employee_id: request.employeeId,
+      year,
+      month,
+      status: "DRAFT",
+    }).lean();
+
+    if (!existingPayslip) return; // no payroll run yet for this period — nothing to refresh
+
+    const monthStr = `${year}-${String(month).padStart(2, "0")}`;
+
+    await payrollRunService.runForEmployee(
+      request.employeeId,
+      request.company_id,
+      request.unit_id,
+      monthStr,
+      { userId: approvedBy, orgId: request.org_id, unitId: request.unit_id }
+    );
+  } catch (err) {
+    // Don't let a payroll recalculation failure block the regularisation approval —
+    // log it so payroll/HR can re-run manually (e.g. if the period is locked).
+    console.error("[triggerPayrollRecalculation] Failed to recalculate payroll:", err.message);
+  }
+};
+
 // ─── APPLY (Employee) ─────────────────────────────────────────
 exports.applyRegularization = async (payload, user) => {
   const {
@@ -533,21 +573,43 @@ exports.updateStatus = async (requestId, payload, user) => {
         meta:    { regularizationId: request._id },
       }).catch(() => {});
 
-    } else {
+    } else if (request.l2ApproverId) {
+      // L2 approval still required — forward the request
       request.status = "UNDER_REVIEW";
       await request.save();
 
-      // L2 ko notify karo
-      if (request.l2ApproverId) {
-        Notification.create({
-          org_id:  request.org_id,
-          userId:  request.l2ApproverId,
-          type:    "REGULARIZATION_APPLIED",
-          title:   "Regularisation Request Pending Your Approval",
-          message: `Ek regularisation request aapke approval ke liye aayi hai`,
-          meta:    { regularizationId: request._id },
-        }).catch(() => {});
-      }
+      Notification.create({
+        org_id:  request.org_id,
+        userId:  request.l2ApproverId,
+        type:    "REGULARIZATION_APPLIED",
+        title:   "Regularisation Request Pending Your Approval",
+        message: `Ek regularisation request aapke approval ke liye aayi hai`,
+        meta:    { regularizationId: request._id },
+      }).catch(() => {});
+
+    } else {
+      // No L2 approver assigned — true L1-only flow. Finalize directly instead
+      // of leaving the request stuck at UNDER_REVIEW forever.
+      request.status = "APPROVED";
+      await request.save();
+
+      await recalculateAttendance(request, user.userId);
+      await triggerPayrollRecalculation(request, user.userId);
+
+      request.isApplied = true;
+      request.appliedAt = new Date();
+      request.appliedBy = toObjId(user.userId);
+      request.status    = "APPLIED";
+      await request.save();
+
+      Notification.create({
+        org_id:  request.org_id,
+        userId:  request.userId,
+        type:    "REGULARIZATION_APPROVED",
+        title:   "Regularisation Request Approved",
+        message: `Tumhari ${new Date(request.date).toDateString()} ki regularisation request approve ho gayi`,
+        meta:    { regularizationId: request._id },
+      }).catch(() => {});
     }
 
     return request;
@@ -588,6 +650,7 @@ exports.updateStatus = async (requestId, payload, user) => {
       await request.save();
 
       await recalculateAttendance(request, user.userId);
+      await triggerPayrollRecalculation(request, user.userId);
 
       request.isApplied = true;
       request.appliedAt = new Date();
@@ -644,6 +707,7 @@ exports.updateStatus = async (requestId, payload, user) => {
       await request.save();
 
       await recalculateAttendance(request, user.userId);
+      await triggerPayrollRecalculation(request, user.userId);
 
       request.isApplied = true;
       request.appliedAt = new Date();

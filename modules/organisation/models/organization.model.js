@@ -140,7 +140,7 @@ organizationSchema.pre("save", function (next) {
       .replace(/\s+/g, "-")
       .replace(/-+/g, "-");
   }
-  next();
+  // next();
 });
 
 module.exports = mongoose.model("Organization", organizationSchema);

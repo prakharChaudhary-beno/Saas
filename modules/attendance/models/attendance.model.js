@@ -148,6 +148,10 @@ const attendanceSchema = new Schema(
       timestamp:  { type: Date, default: null },
       isValid:    { type: Boolean, default: null }, // Within unit radius?
       distance:   { type: Number, default: null },  // Distance from unit (meters)
+      source:     { type: String, default: null },  // 'gps' | 'ip' | 'unit_default' | 'unknown'
+      message:    { type: String, default: null },  // Location capture message
+      city:       { type: String, default: null },   // City (from IP)
+      region:     { type: String, default: null },  // Region/State (from IP)
     },
 
     checkOutLocation: {
@@ -157,6 +161,8 @@ const attendanceSchema = new Schema(
       timestamp:  { type: Date, default: null },
       isValid:    { type: Boolean, default: null },
       distance:   { type: Number, default: null },
+      source:     { type: String, default: null },
+      message:    { type: String, default: null },
     },
 
     // ─── Leave Reference (if ON_LEAVE) ────────────────────────────

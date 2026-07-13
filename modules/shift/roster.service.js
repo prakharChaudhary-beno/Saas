@@ -136,9 +136,19 @@ exports.createRoster = async (payload, user) => {
   });
 
   return await Roster.findById(roster._id)
-    .populate("shift_id",    "name startTime endTime shiftType isDefault")
-    .populate("employee_id", "name employeeId")
-    .populate("createdBy",   "name email")
+    .populate({
+      path: "shift_id",
+      select: "name startTime endTime shiftType isDefault"
+    })
+    .populate({
+      path: "employee_id",
+      select: "name employeeId email phone",
+      model: "Employee"
+    })
+    .populate({
+      path: "createdBy",
+      select: "name email"
+    })
     .lean();
 };
 
@@ -290,9 +300,19 @@ exports.getEmployeeRosters = async (query, user) => {
     .sort({ startDate: -1 })
     .skip(skip)
     .limit(Number(limit))
-    .populate("shift_id",    "name startTime endTime shiftType gracePeriodMinutes workingMinutes isDefault")
-    .populate("employee_id", "name employeeId departmentId")
-    .populate("createdBy",   "name email")
+    .populate({
+      path: "shift_id",
+      select: "name startTime endTime shiftType gracePeriodMinutes workingMinutes isDefault"
+    })
+    .populate({
+      path: "employee_id",
+      select: "name employeeId email phone departmentId",
+      model: "Employee"
+    })
+    .populate({
+      path: "createdBy",
+      select: "name email"
+    })
     .lean();
 
   return {
@@ -334,12 +354,16 @@ exports.getRosterCalendar = async (query, user) => {
   const rosters = await Roster.find(rosterFilter)
     .populate({
       path:   "employee_id",
-      select: "name employeeId departmentId",
+      select: "name employeeId departmentId email phone",
+      model:  "Employee",
       match:  department_id
         ? { departmentId: toObjId(department_id), isDeleted: false }
         : { isDeleted: false },
     })
-    .populate("shift_id", "name startTime endTime shiftType")
+    .populate({
+      path:   "shift_id",
+      select: "name startTime endTime shiftType"
+    })
     .lean();
 
   // Filter out rosters where employee populate returned null (dept filter)
@@ -435,9 +459,9 @@ exports.getRosterById = async (id, user) => {
     company_id: toObjId(user.companyId),
     is_deleted: false,
   })
-    .populate("shift_id",    "name startTime endTime shiftType gracePeriodMinutes workingMinutes isDefault")
-    .populate("employee_id", "name employeeId departmentId designationId")
-    .populate("createdBy",   "name email")
+    .populate({ path: "shift_id", select: "name startTime endTime shiftType gracePeriodMinutes workingMinutes isDefault" })
+    .populate({ path: "employee_id", select: "name employeeId departmentId designationId email", model: "Employee" })
+    .populate({ path: "createdBy", select: "name email" })
     .lean();
 
   if (!roster) throw new AppError("Roster not found", 404);
@@ -490,8 +514,8 @@ exports.updateRoster = async (id, payload, user) => {
   await roster.save();
 
   return await Roster.findById(roster._id)
-    .populate("shift_id",    "name startTime endTime shiftType")
-    .populate("employee_id", "name employeeId")
+    .populate({ path: "shift_id", select: "name startTime endTime shiftType" })
+    .populate({ path: "employee_id", select: "name employeeId email phone", model: "Employee" })
     .lean();
 };
 

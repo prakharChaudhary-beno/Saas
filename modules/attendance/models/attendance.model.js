@@ -140,6 +140,25 @@ const attendanceSchema = new Schema(
       default: false,
     },
 
+    // ─── Geolocation for Punch In/Out ─────────────────────────────
+    checkInLocation: {
+      latitude:   { type: Number, default: null },
+      longitude:  { type: Number, default: null },
+      accuracy:   { type: Number, default: null },  // GPS accuracy in meters
+      timestamp:  { type: Date, default: null },
+      isValid:    { type: Boolean, default: null }, // Within unit radius?
+      distance:   { type: Number, default: null },  // Distance from unit (meters)
+    },
+
+    checkOutLocation: {
+      latitude:   { type: Number, default: null },
+      longitude:  { type: Number, default: null },
+      accuracy:   { type: Number, default: null },
+      timestamp:  { type: Date, default: null },
+      isValid:    { type: Boolean, default: null },
+      distance:   { type: Number, default: null },
+    },
+
     // ─── Leave Reference (if ON_LEAVE) ────────────────────────────
     leaveRequestId: {
       type: Schema.Types.ObjectId,

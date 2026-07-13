@@ -83,6 +83,57 @@ const payslipSchema = new mongoose.Schema({
   lopDays:           { type: Number, default: 0 },
   overtimeHours:     { type: Number, default: 0 },
 
+  // ── Tax Information (Enterprise) ────────────────────────────
+  taxRegime: {
+    type:    String,
+    enum:    ["old", "new"],
+    default: "new",
+  },
+  
+  taxBreakdown: {
+    taxableIncome:   { type: Number, default: 0 },
+    grossTax:        { type: Number, default: 0 },
+    rebate87A:       { type: Number, default: 0 },
+    surcharge:       { type: Number, default: 0 },
+    cess:            { type: Number, default: 0 },
+    totalTax:         { type: Number, default: 0 },
+  },
+  
+  investmentSummary: {
+    declarationId:    { type: mongoose.Schema.Types.ObjectId, ref: 'InvestmentDeclaration' },
+    totalDeclared:    { type: Number, default: 0 },
+    totalApproved:    { type: Number, default: 0 },
+    sections:         [{
+      section:          { type: String },
+      declaredAmount:   { type: Number, default: 0 },
+      approvedAmount:   { type: Number, default: 0 },
+      _id:              false,
+    }],
+  },
+
+  // ── Year-to-Date (YTD) Fields ───────────────────────────────
+  ytd: {
+    earnings: {
+      basic:            { type: Number, default: 0 },
+      hra:              { type: Number, default: 0 },
+      travelAllowance:  { type: Number, default: 0 },
+      medicalAllowance: { type: Number, default: 0 },
+      specialAllowance: { type: Number, default: 0 },
+      overtime:         { type: Number, default: 0 },
+      bonus:            { type: Number, default: 0 },
+      arrears:          { type: Number, default: 0 },
+      totalEarnings:    { type: Number, default: 0 },
+    },
+    deductions: {
+      pf:               { type: Number, default: 0 },
+      esi:              { type: Number, default: 0 },
+      tds:              { type: Number, default: 0 },
+      professionalTax:  { type: Number, default: 0 },
+      lop:              { type: Number, default: 0 },
+      totalDeductions:  { type: Number, default: 0 },
+    },
+  },
+
   // ── Status ─────────────────────────────────────────────────
   status: {
     type:    String,

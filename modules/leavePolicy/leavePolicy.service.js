@@ -10,6 +10,7 @@ const LeaveBalance = require("../leave/models/leaveBalance.models");
 const AppError     = require("../../utils/appError");
 const { invalidatePolicyCache } = require("../../utils/policyResolver");
 const policyVersionService = require("../policyVersion/policyVersion.service");
+// seedLeaveBalances removed - balances calculated dynamically from active policy
 
 const POLICY_TYPE = "LEAVE";
 
@@ -115,7 +116,9 @@ exports.updatePolicy = async (id, body, user) => {
   });
 
   await policy.save();
-  invalidatePolicyCache("leave", user.companyId.toString());
+  if (user.companyId) {
+    invalidatePolicyCache("leave", user.companyId.toString());
+  }
   return policy;
 };
 
@@ -216,6 +219,10 @@ exports.activatePolicy = async (id, user) => {
 
   await policy.save();
   invalidatePolicyCache("leave", user.companyId.toString());
+
+  // NOTE: Balance seeding removed - balances are calculated dynamically from active policy
+  // Employees will automatically have correct allocations based on policy.leaveTypes[].credit.totalPerYear
+
   return policy;
 };
 

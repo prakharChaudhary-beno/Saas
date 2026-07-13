@@ -29,6 +29,13 @@ exports.punchIn = Joi.object({
     .max(500)
     .optional()
     .allow("", null),
+
+  // Geolocation data (optional)
+  geolocation: Joi.object({
+    latitude: Joi.number().min(-90).max(90).required(),
+    longitude: Joi.number().min(-180).max(180).required(),
+    accuracy: Joi.number().min(0).optional(), // GPS accuracy in meters
+  }).optional(),
 });
 
 // ─── POST /punch-out ──────────────────────────────────────────
@@ -39,6 +46,13 @@ exports.punchOut = Joi.object({
     .max(500)
     .optional()
     .allow("", null),
+
+  // Geolocation data (optional)
+  geolocation: Joi.object({
+    latitude: Joi.number().min(-90).max(90).required(),
+    longitude: Joi.number().min(-180).max(180).required(),
+    accuracy: Joi.number().min(0).optional(),
+  }).optional(),
 });
 
 // ─── GET /attendance (HR — all employees) ────────────────────
@@ -48,6 +62,23 @@ exports.getAttendance = Joi.object({
     .optional()
     .messages({
       "string.pattern.base": "month format YYYY-MM hona chahiye",
+    }),
+  
+  // Date range support (new)
+  startDate: Joi.date()
+    .iso()
+    .optional()
+    .messages({
+      "date.format": "startDate ISO format mein hona chahiye (YYYY-MM-DD)",
+    }),
+  
+  endDate: Joi.date()
+    .iso()
+    .min(Joi.ref("startDate"))
+    .optional()
+    .messages({
+      "date.format": "endDate ISO format mein hona chahiye (YYYY-MM-DD)",
+      "date.min": "endDate, startDate se pehle nahi ho sakti",
     }),
 
   employeeId: objectId.optional(),

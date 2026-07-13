@@ -234,6 +234,16 @@ const attendancePolicySchema = new mongoose.Schema(
       },
     },
 
+    // ── Shift Swap Approval Type ────────────────────────────────────────────────
+    // Determines the approval flow for shift swap requests
+    shiftSwapApprovalType: {
+      type: String,
+      enum: ["EMPLOYEE_THEN_MANAGER", "MANAGER_ONLY"],
+      default: "EMPLOYEE_THEN_MANAGER"
+        // EMPLOYEE_THEN_MANAGER: A requests → B accepts/declines → Manager approves/rejects
+        // MANAGER_ONLY: A requests → Manager directly approves/rejects (skips B step)
+    },
+
     // ── Audit ──────────────────────────────────────────────────────────────────
     isDeleted: { type: Boolean, default: false, select: false },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

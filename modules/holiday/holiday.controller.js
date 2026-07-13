@@ -52,6 +52,34 @@ exports.getMasterHolidays = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+exports.createMasterHoliday = async (req, res, next) => {
+  try {
+    const holiday = await holidayService.createMasterHoliday(req.body);
+    res.status(201).json({ success: true, message: "Master holiday created", data: holiday });
+  } catch (err) { next(err); }
+};
+
+exports.updateMasterHoliday = async (req, res, next) => {
+  try {
+    const holiday = await holidayService.updateMasterHoliday(req.params.id, req.body);
+    res.status(200).json({ success: true, message: "Master holiday updated", data: holiday });
+  } catch (err) { next(err); }
+};
+
+exports.toggleMasterHoliday = async (req, res, next) => {
+  try {
+    const result = await holidayService.toggleMasterHoliday(req.params.id);
+    res.status(200).json({ success: true, ...result });
+  } catch (err) { next(err); }
+};
+
+exports.deleteMasterHoliday = async (req, res, next) => {
+  try {
+    const result = await holidayService.deleteMasterHoliday(req.params.id);
+    res.status(200).json({ success: true, ...result });
+  } catch (err) { next(err); }
+};
+
 exports.importHolidays = async (req, res, next) => {
   try {
     const result = await holidayService.importHolidays(req.body, req.user);

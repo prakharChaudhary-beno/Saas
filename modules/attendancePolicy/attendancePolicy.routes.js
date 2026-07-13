@@ -2,7 +2,7 @@ const express  = require("express");
 const router   = express.Router();
 
 const { authenticate }   = require("../../middlewares/auth.middleware");
-const { checkRole }      = require("../../middlewares/checkRole.middleware");
+const checkPermission    = require("../../middlewares/permission.middleware");
 const checkTrial         = require("../../middlewares/checkTrial.middleware");
 const validate           = require("../../middlewares/validate.middleware");
 const { createPolicySchema, updatePolicySchema } = require("./attendancePolicy.validation");
@@ -14,7 +14,7 @@ router.use(authenticate, checkTrial);
 // ── POST /hrms/attendance-policies ───────────────────────────────────────────
 router.post(
   "/",
-  checkRole("hr_manager"),
+  checkPermission("attendancePolicy.create"),
   validate(createPolicySchema),
   ctrl.createPolicy
 );
@@ -22,36 +22,36 @@ router.post(
 // ── GET /hrms/attendance-policies ────────────────────────────────────────────
 router.get(
   "/",
-  checkRole("hr_manager"),
+  checkPermission("attendancePolicy.read"),
   ctrl.getPolicies
 );
 
-// ── GET /hrms/attendance-policies/:id ────────────────────────────────────────
+// ── GET /hrms/attendance-policies/:id ────────────────────────────────────────────
 router.get(
   "/:id",
-  checkRole("hr_manager"),
+  checkPermission("attendancePolicy.read"),
   ctrl.getPolicyById
 );
 
 // ── PUT /hrms/attendance-policies/:id ────────────────────────────────────────
 router.put(
   "/:id",
-  checkRole("hr_manager"),
+  checkPermission("attendancePolicy.update"),
   validate(updatePolicySchema),
   ctrl.updatePolicy
 );
 
-// ── Versioning ────────────────────────────────────────────────────────────────
-router.get("/:id/versions",          checkRole("hr_manager"), ctrl.getVersionHistory);
-router.get("/:id/versions/:version", checkRole("hr_manager"), ctrl.getVersionSnapshot);
-router.post("/:id/restore/:version", checkRole("hr_manager"), ctrl.restoreVersion);
+// ── Versioning ────────────────────────────────────────────────────────
+router.get("/:id/versions",          checkPermission("attendancePolicy.read"), ctrl.getVersionHistory);
+router.get("/:id/versions/:version", checkPermission("attendancePolicy.read"), ctrl.getVersionSnapshot);
+router.post("/:id/restore/:version", checkPermission("attendancePolicy.update"), ctrl.restoreVersion);
 
-// ── Status transitions — Unit Admin only ──────────────────────────────────────
-router.patch("/:id/activate",   checkRole("unit_admin"), ctrl.activatePolicy);
-router.patch("/:id/deactivate", checkRole("unit_admin"), ctrl.deactivatePolicy);
-router.patch("/:id/archive",    checkRole("unit_admin"), ctrl.archivePolicy);
+// ── Status transitions ──────────────────────────────────────
+router.patch("/:id/activate",   checkPermission("attendancePolicy.update"), ctrl.activatePolicy);
+router.patch("/:id/deactivate", checkPermission("attendancePolicy.update"), ctrl.deactivatePolicy);
+router.patch("/:id/archive",    checkPermission("attendancePolicy.update"), ctrl.archivePolicy);
 
-// ── DELETE /hrms/attendance-policies/:id ──────────────────────────────────────
-router.delete("/:id", checkRole("unit_admin"), ctrl.deletePolicy);
+// ── DELETE /hrms/attendance-policies/:id ──────────────────────────────────────────
+router.delete("/:id", checkPermission("attendancePolicy.delete"), ctrl.deletePolicy);
 
 module.exports = router;

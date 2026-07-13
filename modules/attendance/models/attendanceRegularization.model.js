@@ -37,6 +37,9 @@ isLWP:       { type: Boolean, default: false },
   // ─── Attendance Record Reference ─────────────────────────────
   attendanceId: { type: Schema.Types.ObjectId, ref: "Attendance", default: null },
   date:         { type: Date, required: true, index: true },
+  
+  // ─── Policy Reference ────────────────────────────────────────
+  policyId:     { type: Schema.Types.ObjectId, ref: "RegularisationPolicy", default: null },
 
   // ─── Requested Changes ───────────────────────────────────────
   requestedCheckIn:  { type: Date, default: null },   // requested punch-in time

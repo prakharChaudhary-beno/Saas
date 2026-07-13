@@ -147,13 +147,36 @@ exports.createDelegation = async (payload, user) => {
     throw new AppError("At least one permission is required", 400);
   }
 
+  // Support both ObjectId and slug-based permission lookup
+  // Frontend may send slugs like "attendance.view" or ObjectIds
+  const objectIdPattern = /^[a-f\d]{24}$/i;
+  const objectIds = permissionIds.filter(id => objectIdPattern.test(id));
+  const slugs = permissionIds.filter(id => !objectIdPattern.test(id));
+
+  // Build query to match either ObjectId or slug
+  const orConditions = [];
+  if (objectIds.length > 0) {
+    orConditions.push({ _id: { $in: objectIds.map(toObjId) } });
+  }
+  if (slugs.length > 0) {
+    orConditions.push({ slug: { $in: slugs.map(s => s.toLowerCase()) } });
+  }
+
   const permDocs = await Permission.find({
-    _id:       { $in: permissionIds.map(toObjId) },
+    $or: orConditions,
     is_active: true,
   }).lean();
 
   if (permDocs.length !== permissionIds.length) {
-    throw new AppError("One or more permissions not found or inactive", 404);
+    const foundIds = permDocs.map(p => p._id.toString());
+    const foundSlugs = permDocs.map(p => p.slug);
+    const missing = permissionIds.filter(id => 
+      !foundIds.includes(id) && !foundSlugs.includes(id.toLowerCase ? id.toLowerCase() : id)
+    );
+    throw new AppError(
+      `One or more permissions not found or inactive: ${missing.join(", ")}`,
+      404
+    );
   }
 
   // Rule 1: Can only delegate permissions you have
@@ -253,6 +276,33 @@ exports.createDelegation = async (payload, user) => {
     await Delegation.findByIdAndUpdate(delegation._id, { notifiedAt: new Date() });
   } catch (_) {
     // Non-fatal
+  }
+
+  // ── In-App Notification to Delegatee ──
+  // Matrix Requirement: Permission delegated to you (🔔+📧) Priority: 🟡 Important
+  try {
+    const sendNotification = require("../../utils/sendNotification");
+    await sendNotification({
+      type:          "DELEGATION_RECEIVED",
+      userId:        delegatee_id,
+      org_id:        user.orgId,
+      unit_id:       targetUnitId,
+      referenceId:   delegation._id,
+      referenceType: "Delegation",
+      data: {
+        delegatorName: user.name,
+        permissions:   permDocs.map((p) => p.label || p.slug).join(", "),
+        startDate:     fmtDate(start),
+        endDate:       fmtDate(end),
+        reason,
+        delegationId:  delegation._id.toString(),
+      },
+      inApp:  true,
+      push:   false  // Important, not critical
+    });
+    console.log(`[createDelegation] ✅ In-app notification sent to delegatee: ${delegatee_id}`);
+  } catch (notifErr) {
+    console.error(`[createDelegation] ⚠️ Notification failed:`, notifErr.message);
   }
 
   return delegation;
@@ -413,6 +463,31 @@ exports.revokeDelegation = async (id, payload, user) => {
       });
     }
   } catch (_) {}
+
+  // ── In-App Notification to Delegatee ──
+  // Matrix Requirement: Delegation revoked (🔔) Priority: 🟢 Informational
+  try {
+    const sendNotification = require("../../utils/sendNotification");
+    await sendNotification({
+      type:          "DELEGATION_REVOKED",
+      userId:        delegation.delegatee_id,
+      org_id:        delegation.org_id,
+      unit_id:       delegation.unit_id,
+      referenceId:   delegation._id,
+      referenceType: "Delegation",
+      data: {
+        delegatorName: user.name,
+        permissions:   delegation.permissionSlugs?.join(", ") || "",
+        reason,
+        delegationId:  delegation._id.toString(),
+      },
+      inApp:  true,
+      push:   false  // Informational only
+    });
+    console.log(`[revokeDelegation] ✅ In-app notification sent to delegatee: ${delegation.delegatee_id}`);
+  } catch (notifErr) {
+    console.error(`[revokeDelegation] ⚠️ Notification failed:`, notifErr.message);
+  }
 
   return { message: "Delegation revoked successfully", delegation };
 };

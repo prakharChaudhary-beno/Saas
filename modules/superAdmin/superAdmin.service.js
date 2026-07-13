@@ -1,10 +1,9 @@
 // modules/superAdmin/superAdmin.service.js
-// UPDATED — tenantId → org_id scope
-// Tenant model fields: companyName, companyEmail, companyPhone, plan, status, isDeleted
+// UPDATED — Query Customer model instead of Tenant model
+// Tenant functionality now uses Customer + Organization models
 
 "use strict";
 
-const Tenant   = require("../tenant/tenant.models");
 const Employee = require("../employee/models/employee.model");
 const User     = require("../auth/models/user.model");
 const Plan     = require("../plan/models/plan.model");
@@ -26,39 +25,53 @@ const toSlug = (str) =>
 const generateTempPassword = () =>
   Math.random().toString(36).slice(-8) + "A1@";
 // ─────────────────────────────────────────────────────────────────────────────
-// GET ALL TENANTS (Organisations)
+// GET ALL TENANTS (Customers)
 // GET /api/v1/super-admin/tenants
+// FIXED: Query Customer model instead of Tenant model
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.getAllTenants = async (query) => {
-  const { plan, status, search, page = 1, limit = 20 } = query;
+  const { status, search, page = 1, limit = 20 } = query;
 
-  const filter = { isDeleted: false };
+  const filter = { is_deleted: false };
 
-  if (plan)   filter.plan   = plan;
   if (status) filter.status = status;
 
   if (search) {
     filter.$or = [
-      { companyName:  { $regex: search, $options: "i" } },
-      { companyEmail: { $regex: search, $options: "i" } },
+      { business_name:  { $regex: search, $options: "i" } },
+      { contact_email: { $regex: search, $options: "i" } },
+      { contact_name:  { $regex: search, $options: "i" } },
     ];
   }
 
   const skip = (Number(page) - 1) * Number(limit);
 
-  const [tenants, total] = await Promise.all([
-    Tenant.find(filter)
-      .select("companyName companyEmail companyPhone plan status isTrial trialEndsAt isTrialExpired isOnboardingComplete createdAt")
+  const [customers, total] = await Promise.all([
+    Customer.find(filter)
+      .populate("plan_id", "name")
+      .select("business_name contact_name contact_email contact_phone plan_id status payment_method created_by createdAt")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit)),
-    Tenant.countDocuments(filter),
+    Customer.countDocuments(filter),
   ]);
 
-  // Employee count per org — org_id scope
-  const orgIds = tenants.map((t) => t._id);
+  // Get organizations for each customer to count employees/users
+  const customerIds = customers.map((c) => c._id);
+  
+  const organizations = await Organization.find({
+    customer_id: { $in: customerIds },
+    is_deleted: false
+  }).select("_id customer_id");
 
+  const orgIds = organizations.map((o) => o._id);
+  const customerOrgMap = {};
+  organizations.forEach((o) => {
+    customerOrgMap[o.customer_id.toString()] = o._id;
+  });
+
+  // Employee count per org
   const employeeCounts = await Employee.aggregate([
     {
       $match: {
@@ -100,21 +113,39 @@ exports.getAllTenants = async (query) => {
     userCountMap[u._id.toString()] = u.count;
   });
 
-  const data = tenants.map((t) => ({
-    id:                   t._id,
-    name:                 t.companyName  || "—",
-    email:                t.companyEmail,
-    phone:                t.companyPhone || "—",
-    plan:                 t.plan,
-    status:               t.status,
-    employeeCount:        countMap[t._id.toString()]  || 0,
-    userCount:            userCountMap[t._id.toString()] || 0,
-    isTrial:              t.isTrial || false,
-    trialEndsAt:          t.trialEndsAt,
-    isTrialExpired:       t.isTrialExpired,
-    isOnboardingComplete: t.isOnboardingComplete,
-    joinedAt:             t.createdAt,
-  }));
+  // Get subscription info for each customer's org
+  const subscriptions = await Subscription.find({
+    org_id: { $in: orgIds },
+    is_active: true
+    }).select("org_id status plan_snapshot.name plan_snapshot.package_type").lean();
+
+  const subscriptionMap = {};
+  subscriptions.forEach((s) => {
+    subscriptionMap[s.org_id.toString()] = s;
+  });
+
+  const data = customers.map((c) => {
+    const orgId = customerOrgMap[c._id.toString()];
+    const subscription = orgId ? subscriptionMap[orgId.toString()] : null;
+
+    return {
+      id:                   c._id,
+      name:                 c.business_name  || "—",
+      contactName:          c.contact_name   || "—",
+      email:                c.contact_email,
+      phone:                c.contact_phone  || "—",
+      plan:                 c.plan_id?.name || subscription?.plan_snapshot?.name || "—",
+      planId:               c.plan_id?._id || null,
+      packageType:          subscription?.plan_snapshot?.package_type || null,
+      status:               c.status,
+      employeeCount:        orgId ? (countMap[orgId.toString()]  || 0) : 0,
+      userCount:            orgId ? (userCountMap[orgId.toString()] || 0) : 0,
+      subscriptionStatus:   subscription?.status || null,
+      paymentMethod:        c.payment_method || null,
+      created:              c.created_by || "SELF",
+      joinedAt:             c.createdAt,
+    };
+  });
 
   return {
     tenants: data,
@@ -149,10 +180,10 @@ exports.getCustomerHierarchy = async (query) => {
 
   const hierarchy = await Promise.all(
     customers.map(async (customer) => {
-      const orgs = await Tenant.find({
+      const orgs = await Organization.find({
         customer_id: customer._id,
-        isDeleted:   false,
-      }).select("companyName companyEmail plan status isTrial trialEndsAt isOnboardingComplete createdAt").lean();
+        is_deleted:  false,
+      }).select("name slug email status is_active createdAt").lean();
 
       const orgsWithCompanies = await Promise.all(
         orgs.map(async (org) => {
@@ -168,16 +199,14 @@ exports.getCustomerHierarchy = async (query) => {
           });
 
           return {
-            id:                   org._id,
-            name:                 org.companyName,
-            email:                org.companyEmail,
-            plan:                 org.plan,
-            status:               org.status,
-            isTrial:              org.isTrial,
-            trialEndsAt:          org.trialEndsAt,
-            isOnboardingComplete: org.isOnboardingComplete,
-            employeeCount:        empCount,
-            joinedAt:             org.createdAt,
+            id:            org._id,
+            name:          org.name,
+            slug:          org.slug,
+            email:         org.email,
+            status:        org.status,
+            isActive:      org.is_active,
+            employeeCount: empCount,
+            joinedAt:      org.createdAt,
             companies,
           };
         })
@@ -212,87 +241,139 @@ exports.getCustomerHierarchy = async (query) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET SINGLE TENANT DETAIL
 // GET /api/v1/super-admin/tenants/:id
+// FIXED: Query Customer model instead of Tenant model
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.getTenantById = async (tenantId) => {
-  const tenant = await Tenant.findOne({
-    _id:       tenantId,
-    isDeleted: false,
+  const customer = await Customer.findOne({
+    _id:        tenantId,
+    is_deleted: false,
+  }).populate("plan_id", "name package_type");
+
+  if (!customer) throw new AppError("Customer not found", 404);
+
+  // Get organization for this customer
+  const organization = await Organization.findOne({
+    customer_id: customer._id,
+    is_deleted: false
   });
 
-  if (!tenant) throw new AppError("Organisation not found", 404);
+  let employeeData = null;
+  let userData = null;
+  let subscriptionData = null;
 
-  const [totalEmployees, employeeBreakdown, totalUsers] = await Promise.all([
-    Employee.countDocuments({ org_id: tenant._id, isDeleted: false }),
+  if (organization) {
+    const [totalEmployees, employeeBreakdown, totalUsers] = await Promise.all([
+      Employee.countDocuments({ org_id: organization._id, isDeleted: false }),
+      
+      Employee.aggregate([
+        { $match: { org_id: organization._id, isDeleted: false } },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ]),
 
-    Employee.aggregate([
-      { $match: { org_id: tenant._id, isDeleted: false } },
-      { $group: { _id: "$status", count: { $sum: 1 } } },
-    ]),
+      User.countDocuments({ org_id: organization._id, is_deleted: false }),
+    ]);
 
-    User.countDocuments({ org_id: tenant._id, is_deleted: false }),
-  ]);
+    const byStatus = {};
+    employeeBreakdown.forEach((e) => { byStatus[e._id] = e.count; });
 
-  const byStatus = {};
-  employeeBreakdown.forEach((e) => { byStatus[e._id] = e.count; });
+    employeeData = { totalEmployees, byStatus };
+    userData = totalUsers;
+
+    // Get subscription
+    subscriptionData = await Subscription.findOne({
+      org_id: organization._id,
+      is_active: true
+    }).select("status plan_snapshot billing_cycle ends_at createdAt");
+  }
 
   return {
-    id:                   tenant._id,
-    tenantCode:           tenant.tenantCode,
-    name:                 tenant.companyName,
-    email:                tenant.companyEmail,
-    phone:                tenant.companyPhone,
-    plan:                 tenant.plan,
-    status:               tenant.status,
-    isTrial:              tenant.isTrial || false,
-    trialEndsAt:          tenant.trialEndsAt,
-    isTrialExpired:       tenant.isTrialExpired,
-    isOnboardingComplete: tenant.isOnboardingComplete,
-    onboardingStep:       tenant.onboardingStep,
-    companySize:          tenant.companySize,
-    address:              tenant.address,
-    joinedAt:             tenant.createdAt,
-    updatedAt:            tenant.updatedAt,
+    id:                   customer._id,
+    name:                 customer.business_name,
+    contactName:          customer.contact_name,
+    email:                customer.contact_email,
+    phone:                customer.contact_phone,
+    plan:                 customer.plan_id?.name || "—",
+    planId:               customer.plan_id?._id || null,
+    packageType:          customer.plan_id?.package_type || null,
+    status:               customer.status,
+    paymentMethod:        customer.payment_method || null,
+    gstNumber:            customer.gst_number || null,
+    panNumber:            customer.pan_number || null,
+    billingAddress:       customer.billing_address || null,
+    organization:         organization ? {
+      id:                 organization._id,
+      name:               organization.name,
+      slug:               organization.slug,
+    } : null,
+    subscription:         subscriptionData ? {
+      status:             subscriptionData.status,
+      planName:           subscriptionData.plan_snapshot?.name,
+      billingCycle:       subscriptionData.billing_cycle,
+      endsAt:             subscriptionData.ends_at,
+    } : null,
     usage: {
-      totalEmployees,
-      totalUsers,
-      byStatus,
+      totalEmployees:     employeeData?.totalEmployees || 0,
+      totalUsers:         userData || 0,
+      byStatus:           employeeData?.byStatus || {},
     },
+    created:              customer.created_by,
+    joinedAt:             customer.createdAt,
+    updatedAt:            customer.updatedAt,
   };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OVERRIDE TENANT PLAN
 // POST /api/v1/super-admin/tenants/:id/plan
+// FIXED: Use Customer model and Subscription instead
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.overrideTenantPlan = async (tenantId, { planId, reason }, adminEmail, ipAddress) => {
-  const tenant = await Tenant.findOne({ _id: tenantId, isDeleted: false });
-  if (!tenant) throw new AppError("Organisation not found", 404);
+  const customer = await Customer.findOne({ _id: tenantId, is_deleted: false });
+  if (!customer) throw new AppError("Customer not found", 404);
 
   const plan = await Plan.findById(planId);
   if (!plan) throw new AppError("Plan not found", 404);
 
-  const previousPlan = tenant.plan;
+  const previousPlanId = customer.plan_id;
+  const previousPlanName = customer.plan_id?.name || "—";
 
-  tenant.plan = plan.name;
+  // Update customer's plan
+  customer.plan_id = planId;
+  await customer.save();
 
-  // Trial logic
-  if (plan.name === "TRIAL") {
-    tenant.trialEndsAt    = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-    tenant.isTrialExpired = false;
-  } else if (previousPlan === "TRIAL") {
-    tenant.isTrialExpired = false;
+  // Get organization for this customer
+  const organization = await Organization.findOne({
+    customer_id: customer._id,
+    is_deleted: false
+  });
+
+  // Update subscription if org exists
+  if (organization) {
+    await Subscription.findOneAndUpdate(
+      { org_id: organization._id, is_active: true },
+      {
+        plan_id: planId,
+        plan_snapshot: {
+          name: plan.name,
+          package_type: plan.package_type,
+          price_monthly: plan.price_monthly,
+          price_annual: plan.price_annual,
+          seat_limit: plan.seat_limit,
+          modules: plan.modules,
+          features: plan.features,
+        },
+      }
+    );
   }
-
-  await tenant.save();
 
   await AuditLog.create({
     actorEmail:     adminEmail,
     action:         "PLAN_OVERRIDE",
     targetTenantId: tenantId,
     details: {
-      from:   previousPlan,
+      from:   previousPlanName,
       to:     plan.name,
       reason: reason || "No reason provided",
     },
@@ -300,10 +381,10 @@ exports.overrideTenantPlan = async (tenantId, { planId, reason }, adminEmail, ip
   });
 
   return {
-    id:          tenant._id,
-    name:        tenant.companyName,
-    plan:        tenant.plan,
-    trialEndsAt: tenant.trialEndsAt,
+    id:          customer._id,
+    name:        customer.business_name,
+    plan:        plan.name,
+    planId:      planId,
   };
 };
 
@@ -313,17 +394,30 @@ exports.overrideTenantPlan = async (tenantId, { planId, reason }, adminEmail, ip
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.updateTenantStatus = async (tenantId, { status, reason }, adminEmail, ipAddress) => {
-  const allowed = ["ACTIVE", "SUSPENDED", "INACTIVE"];
+  const allowed = ["Active", "Inactive", "Suspended"];
   if (!allowed.includes(status)) {
     throw new AppError(`Invalid status. Allowed: ${allowed.join(", ")}`, 400);
   }
 
-  const tenant = await Tenant.findOne({ _id: tenantId, isDeleted: false });
-  if (!tenant) throw new AppError("Organisation not found", 404);
+  const customer = await Customer.findOne({ _id: tenantId, is_deleted: false });
+  if (!customer) throw new AppError("Customer not found", 404);
 
-  const previousStatus = tenant.status;
-  tenant.status = status;
-  await tenant.save();
+  const previousStatus = customer.status;
+  customer.status = status;
+  await customer.save();
+
+  // If suspending, also suspend organization
+  if (status === "Suspended") {
+    await Organization.updateOne(
+      { customer_id: customer._id },
+      { is_active: false }
+    );
+  } else if (status === "Active") {
+    await Organization.updateOne(
+      { customer_id: customer._id },
+      { is_active: true }
+    );
+  }
 
   await AuditLog.create({
     actorEmail:     adminEmail,
@@ -338,9 +432,9 @@ exports.updateTenantStatus = async (tenantId, { status, reason }, adminEmail, ip
   });
 
   return {
-    id:     tenant._id,
-    name:   tenant.companyName,
-    status: tenant.status,
+    id:     customer._id,
+    name:   customer.business_name,
+    status: customer.status,
   };
 };
 

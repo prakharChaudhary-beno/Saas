@@ -12,7 +12,8 @@ const router     = express.Router();
 const attendanceController             = require("./attendance.controller");
 const attendanceValidation             = require("./attendance.validation");
 const { authenticate }                 = require("../../middlewares/auth.middleware");
-const { checkRole, requireTenantUser } = require("../../middlewares/checkRole.middleware");
+const { requireTenantUser }            = require("../../middlewares/checkRole.middleware");
+const checkPermission                  = require("../../middlewares/permission.middleware");
 const checkTrial                       = require("../../middlewares/checkTrial.middleware");
 const validate                         = require("../../middlewares/validate.middleware");
 
@@ -32,71 +33,83 @@ const { configSchema }        = require("../companyConfig/companyConfig.validati
 
 router.get(
   "/policy",
-  checkRole("employee"),
+  checkPermission("attendance.read"),
   companyConfigController.getConfig
 );
 
 router.post(
   "/policy",
-  checkRole("hr_manager"),
+  checkPermission("attendance.create"),
   validate(configSchema),
   companyConfigController.createConfig
 );
 
 router.put(
   "/policy",
-  checkRole("hr_manager"),
+  checkPermission("attendance.update"),
   validate(configSchema),
   companyConfigController.updateConfig
 );
 
-// GET /hrms/me/attendance/today — aaj ka punch status
+// GET /hrms/me/attendance/today — aaj ka punch status (attendance.read permission)
 router.get(
   "/me/today",
-  checkRole("employee"),
+  checkPermission("attendance.read"),
   attendanceController.getTodayStatus
 );
 
-// GET /hrms/me/attendance/summary?month=YYYY-MM — monthly summary
+// GET /hrms/me/attendance/summary?month=YYYY-MM — monthly summary (attendance.read permission)
 router.get(
   "/me/summary",
-  checkRole("employee"),
+  checkPermission("attendance.read"),
   validate(attendanceValidation.getSummary, "query"),
   attendanceController.getMySummary
 );
 
-// GET /hrms/me/attendance?month=YYYY-MM — full detail records
+// GET /hrms/me/attendance?month=YYYY-MM — full detail records (attendance.read permission)
 router.get(
   "/me",
-  checkRole("employee"),  
+  checkPermission("attendance.read"),  
   validate(attendanceValidation.getMyAttendance, "query"),
   attendanceController.getMyAttendance
 );
 
-// POST /hrms/me/attendance/punch-in — punch in
+// POST /hrms/me/attendance/punch-in — punch in (attendance.create permission)
 router.post(
   "/me/punch-in",
-  checkRole("employee"),
+  checkPermission("attendance.create"),
   validate(attendanceValidation.punchIn),
   attendanceController.punchIn
 );
 
-// POST /hrms/me/attendance/punch-out — punch out
+// POST /hrms/me/attendance/punch-out — punch out (attendance.update permission)
 router.post(
   "/me/punch-out",
-  checkRole("employee"),
+  checkPermission("attendance.update"),
   validate(attendanceValidation.punchOut),
   attendanceController.punchOut
 );
 
 // ─────────────────────────────────────────────────────────────
-// HR MANAGER routes
+// MANAGER routes (Team Attendance)
 // ─────────────────────────────────────────────────────────────
 
-// GET /hrms/attendance?month=&employeeId=&status= — all employees
+// GET /hrms/attendance/team — manager sees their team's attendance
+router.get(
+  "/team",
+  checkPermission("attendance.read"),
+  validate(attendanceValidation.getAttendance, "query"),
+  attendanceController.getTeamAttendance
+);
+
+// ─────────────────────────────────────────────────────────────
+// HR MANAGER + UNIT ADMIN routes (attendance.read permission)
+// ─────────────────────────────────────────────────────────────
+
+// GET /hrms/attendance?month=&employeeId=&status= — all employees (unit scoped)
 router.get(
   "/",
-  checkRole("hr_manager"),
+  checkPermission("attendance.read"),
   validate(attendanceValidation.getAttendance, "query"),
   attendanceController.getAllAttendance
 );
@@ -104,7 +117,7 @@ router.get(
 // PATCH /hrms/attendance/:id/regularize — HR manually fix kare
 router.patch(
   "/:id/regularize",
-  checkRole("hr_manager"),
+  checkPermission("attendance.update"),
   validate(attendanceValidation.regularize),
   attendanceController.regularize
 );

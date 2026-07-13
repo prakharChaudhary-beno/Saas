@@ -73,6 +73,36 @@ if (cron) {
   });
 
   console.log('[Cron] Auto absent marker scheduled — runs at 11:55 PM daily');
-}
+  // ── MODERATE GAP 4: Shift Swap Auto-Expiry ──────────────────
+  // Mark expired swap requests at midnight daily
+  const runShiftSwapExpiry = async () => {
+    const ShiftSwapRequest = require('./modules/shift/models/shiftSwapRequest.model');
+    const mongoose = require('mongoose');
+    const toMidnight = (d) => { const dt = new Date(d); dt.setHours(0,0,0,0); return dt; };
+
+    const today = toMidnight(new Date());
+    
+    const result = await ShiftSwapRequest.updateMany(
+      {
+        status: { $in: ["PENDING_ACCEPTANCE", "PENDING_APPROVAL"] },
+        swapDate: { $lt: today },
+        is_deleted: false,
+      },
+      { $set: { status: "EXPIRED" } }
+    );
+
+    console.log(`[Cron] Shift swap expiry: ${result.modifiedCount} requests marked as expired`);
+  };
+
+  cron.schedule('0 0 * * *', async () => {
+    console.log('[Cron] Running shift swap auto-expiry...');
+    try {
+      await runShiftSwapExpiry();
+    } catch (err) {
+      console.error('[Cron] Shift swap auto-expiry failed:', err.message);
+    }
+  });
+
+  console.log('[Cron] Shift swap auto-expiry scheduled — runs at midnight daily');}
 
 module.exports = app;

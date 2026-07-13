@@ -207,26 +207,45 @@ leaveRequestSchema.pre(/^find/, function (next) {
 leaveRequestSchema.methods.canUserAct = function (user) {
   const userId = user._id.toString();
 
-  if (user.role === "SUPER_ADMIN")  return { canAct: true, level: null, reason: "Super Admin override" };
-  if (user.role === "org_admin")    return { canAct: true, level: null, reason: "Org Admin override" };
+  // Admin bypass
+  if (user.role === "SUPER_ADMIN") return { canAct: true, level: null, reason: "Super Admin override" };
+  if (user.role === "org_admin") return { canAct: true, level: null, reason: "Org Admin override" };
+  if (user.role === "company_admin") return { canAct: true, level: null, reason: "Company Admin override" };
 
   if (!["PENDING", "UNDER_REVIEW"].includes(this.status)) {
     return { canAct: false, level: null, reason: `Request is already ${this.status}` };
   }
 
+  // Normalize IDs
+  const normalizeId = (id) => id ? String(id) : null;
+  const currentUserId = normalizeId(user._id);
+  const requestL1Approver = normalizeId(this.l1ApproverId);
+  const requestL2Approver = normalizeId(this.l2ApproverId);
+
   // L1 — Manager
-  if (this.status === "PENDING" && this.l1ApproverId?.toString() === userId) {
+  if (this.status === "PENDING" && requestL1Approver === currentUserId) {
     return { canAct: true, level: 1, reason: "L1 Approver (Manager)" };
   }
 
   // L2 — HR Manager
-  if (this.status === "UNDER_REVIEW" && this.l2ApproverId?.toString() === userId) {
+  if (this.status === "UNDER_REVIEW" && requestL2Approver === currentUserId) {
     return { canAct: true, level: 2, reason: "L2 Approver (HR Manager)" };
   }
 
-  // HR Manager — no L1 assigned
-  if (user.role === "hr_manager" && this.status === "PENDING" && !this.l1ApproverId) {
-    return { canAct: true, level: 2, reason: "HR Manager (no L1 assigned)" };
+  // HR Manager — flexible role checking
+  const hrManagerRoles = ["hr_manager", "company_hr_manager", "unit_admin", "hr", "HR", "hr-admin"];
+  if (hrManagerRoles.includes(user.role)) {
+    if (this.status === "PENDING") {
+      return { canAct: true, level: 1, reason: "HR Manager can approve L1" };
+    }
+    if (this.status === "UNDER_REVIEW") {
+      return { canAct: true, level: 2, reason: "HR Manager can approve L2" };
+    }
+  }
+
+  // No approvers assigned — allow HR to approve
+  if (!requestL1Approver && !requestL2Approver && hrManagerRoles.includes(user.role)) {
+    return { canAct: true, level: this.status === "PENDING" ? 1 : 2, reason: "HR Manager (no approvers assigned)" };
   }
 
   return { canAct: false, level: null, reason: "You are not authorized to act on this request" };

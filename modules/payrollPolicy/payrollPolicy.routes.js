@@ -2,37 +2,42 @@ const express = require("express");
 const router  = express.Router();
 
 const { authenticate }   = require("../../middlewares/auth.middleware");
-const { checkRole }      = require("../../middlewares/checkRole.middleware");
+const checkPermission    = require("../../middlewares/permission.middleware");
 const checkTrial         = require("../../middlewares/checkTrial.middleware");
 const validate           = require("../../middlewares/validate.middleware");
 const { createPolicySchema, updatePolicySchema } = require("./payrollPolicy.validation");
 const ctrl               = require("./payrollPolicy.controller");
 const runCtrl            = require("./payrollRun.controller");
+const historyCtrl        = require("./payrollHistory.controller");
 
 // ── Global guards ─────────────────────────────────────────────────────────────
 router.use(authenticate, checkTrial);
 
+// ── Metadata endpoints (must come before /:id routes) ───────────────────────
+router.get("/meta/pt-states", ctrl.getPTStates);
+
+// ── Payroll History (aggregated by month) ─────────────────────────────────────
+router.get("/history", checkPermission("payroll.read"), historyCtrl.getPayrollHistory);
+
 // ── CRUD ──────────────────────────────────────────────────────────────────────
-router.post(  "/",    checkRole("hr_manager"),   validate(createPolicySchema), ctrl.createPolicy);
-router.get(   "/",    checkRole("hr_manager"),                                 ctrl.getPolicies);
-router.get(   "/:id", checkRole("hr_manager"),                                 ctrl.getPolicyById);
-router.put(   "/:id", checkRole("hr_manager"),   validate(updatePolicySchema), ctrl.updatePolicy);
-router.delete("/:id", checkRole("unit_admin"),                               ctrl.deletePolicy);
+router.post(  "/",    checkPermission("payroll.create"),   validate(createPolicySchema), ctrl.createPolicy);
+router.get(   "/",    checkPermission("payroll.read"),                                 ctrl.getPolicies);
+router.get(   "/:id", checkPermission("payroll.read"),                                 ctrl.getPolicyById);
+router.put(   "/:id", checkPermission("payroll.update"),   validate(updatePolicySchema), ctrl.updatePolicy);
+router.delete("/:id", checkPermission("payroll.delete"),                               ctrl.deletePolicy);
 
-// ── Versioning ────────────────────────────────────────────────────────────────
-router.get("/:id/versions",          checkRole("hr_manager"), ctrl.getVersionHistory);
-router.get("/:id/versions/:version", checkRole("hr_manager"), ctrl.getVersionSnapshot);
-router.post("/:id/restore/:version", checkRole("hr_manager"), ctrl.restoreVersion);
+// ── Versioning ────────────────────────────────────────────────────────
+router.get("/:id/versions",          checkPermission("payroll.read"), ctrl.getVersionHistory);
+router.get("/:id/versions/:version", checkPermission("payroll.read"), ctrl.getVersionSnapshot);
+router.post("/:id/restore/:version", checkPermission("payroll.update"), ctrl.restoreVersion);
 
-// ── Status transitions ────────────────────────────────────────────────────────
-router.patch("/:id/activate",   checkRole("unit_admin"), ctrl.activatePolicy);
-router.patch("/:id/deactivate", checkRole("unit_admin"), ctrl.deactivatePolicy);
-router.patch("/:id/archive",    checkRole("unit_admin"), ctrl.archivePolicy);
+// ── Status transitions ────────────────────────────────────────────────
+router.patch("/:id/activate",   checkPermission("payroll.update"), ctrl.activatePolicy);
+router.patch("/:id/deactivate", checkPermission("payroll.update"), ctrl.deactivatePolicy);
+router.patch("/:id/archive",    checkPermission("payroll.update"), ctrl.archivePolicy);
 
-// ── Payroll Run ───────────────────────────────────────────────────────────────
-// POST /payroll-policies/run              → run for all active employees (tenant-wide)
-// POST /payroll-policies/run/:employeeId  → run for one employee
-router.post("/run",              checkRole("hr_manager"), runCtrl.runForTenant);
-router.post("/run/:employeeId",  checkRole("hr_manager"), runCtrl.runForEmployee);
+// ── Payroll Run ───────────────────────────────────────────────────────
+router.post("/run",              checkPermission("payroll.run"), runCtrl.runForTenant);
+router.post("/run/:employeeId",  checkPermission("payroll.run"), runCtrl.runForEmployee);
 
 module.exports = router;

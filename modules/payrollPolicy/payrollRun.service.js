@@ -12,6 +12,7 @@ const Attendance             = require("../attendance/models/attendance.model");
 const LeaveBalance           = require("../leave/models/leaveBalance.models");
 const CompanyConfig          = require("../companyConfig/models/companyConfig.model");
 const Payslip                = require("./models/payslip.model");
+const InvestmentDeclaration  = require("./models/investmentDeclaration.model");
 const mongoose               = require("mongoose");
 
 // ─── Parse "YYYY-MM" → { year, month, start, end } ───────────
@@ -135,23 +136,123 @@ if ((esiConfig?.enabled !== false) && grossBeforeLOP < 21000) {
    esiEmployee = parseFloat((grossBeforeLOP * esiRate).toFixed(2));
   }
 
-  // ── Professional Tax ─────────────────────────────────────────
-  // Simplified slab (Karnataka example — ideally per pt_state)
-  let professionalTax = 0;
-  if (grossSalary > 15000) professionalTax = 200;
-  else if (grossSalary > 10000) professionalTax = 150;
-  else if (grossSalary > 7500) professionalTax = 100;
+  // ── Professional Tax (State-wise) ─────────────────────────────────────────
+  const { calculatePT } = require("../../config/ptSlabs");
+  const ptState = policy?.taxCompliance?.ptState || employee?.location?.stateCode || employee?.currentAddress?.stateCode || 'KA';
+  const professionalTax = calculatePT(ptState, grossSalary);
 
-  // ── TDS (simplified annual projection) ──────────────────────
-  const tdsConfig = policy?.taxCompliance?.tds;
+  // ── TDS Calculation (Old/New Regime) ──────────────────────────────────────
+  const { calculateTDSOldRegime, calculateTDSNewRegime, STANDARD_DEDUCTION } = require("../../config/tdsSlabs");
+  const InvestmentDeclaration = require("./models/investmentDeclaration.model");
+  
   let tds = 0;
-  if (tdsConfig?.enabled && tdsConfig.annualTax) {
-    tds = parseFloat((tdsConfig.annualTax / 12).toFixed(2));
+  let taxBreakdown = null;
+  
+  if (policy?.tdsConfig?.enabled !== false) {
+    try {
+      // Get investment declaration for tax exemption
+      const financialYear = year >= 4 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
+      const declaration = await InvestmentDeclaration.findOne({
+        employee_id: employee._id,
+        financialYear,
+        status: { $in: ["APPROVED", "LOCKED"] }
+      }).lean();
+      
+      const investments = declaration?.investments || [];
+      const totalExemption = investments.reduce((sum, inv) => sum + (inv.approvedAmount || inv.declaredAmount || 0), 0);
+      
+      // Annual taxable income
+      const annualGross = grossSalary * 12;
+      const taxableIncome = Math.max(0, annualGross - STANDARD_DEDUCTION - totalExemption);
+      
+      // Calculate age for senior citizen exemption
+      const age = employee.dateOfBirth ? Math.floor((new Date() - new Date(employee.dateOfBirth)) / (365.25 * 24 * 60 * 60 * 1000)) : 30;
+      const ageGroup = age >= 80 ? 'super_senior' : age >= 60 ? 'senior' : 'general';
+      
+      const regime = policy?.tdsConfig?.taxRegime || 'new';
+      
+      if (regime === 'new') {
+        const tdsCalc = calculateTDSNewRegime(taxableIncome);
+        tds = tdsCalc.monthlyTDS;
+        taxBreakdown = tdsCalc;
+      } else {
+        const tdsCalc = calculateTDSOldRegime(taxableIncome, ageGroup);
+        tds = tdsCalc.monthlyTDS;
+        taxBreakdown = tdsCalc;
+      }
+    } catch (err) {
+      console.error('TDS calculation error:', err.message);
+      tds = 0; // Fallback to 0 if calculation fails
+    }
   }
 
   // ── Net salary ───────────────────────────────────────────────
   const totalDeductions = parseFloat((pfEmployee + esiEmployee + tds + professionalTax + lopDeduction).toFixed(2));
   const netSalary       = parseFloat((grossSalary - (pfEmployee + esiEmployee + tds + professionalTax)).toFixed(2));
+
+  // ── Calculate YTD (Year-to-Date) ─────────────────────────────────────────
+  const ytdPayslips = await Payslip.find({
+    employee_id: employee._id,
+    year,
+    month: { $lte: month },
+    status: { $ne: "DRAFT" }
+  }).lean();
+  
+  const ytd = {
+    earnings: {
+      basic: 0,
+      hra: 0,
+      travelAllowance: 0,
+      medicalAllowance: 0,
+      specialAllowance: 0,
+      overtime: 0,
+      bonus: 0,
+      arrears: 0,
+      totalEarnings: 0,
+    },
+    deductions: {
+      pf: 0,
+      esi: 0,
+      tds: 0,
+      professionalTax: 0,
+      lop: 0,
+      totalDeductions: 0,
+    }
+  };
+  
+  // Sum up previous months
+  ytdPayslips.forEach(slip => {
+    ytd.earnings.basic += slip.earnings?.basic || 0;
+    ytd.earnings.hra += slip.earnings?.hra || 0;
+    ytd.earnings.travelAllowance += slip.earnings?.travelAllowance || 0;
+    ytd.earnings.medicalAllowance += slip.earnings?.medicalAllowance || 0;
+    ytd.earnings.specialAllowance += slip.earnings?.specialAllowance || 0;
+    ytd.earnings.overtime += slip.earnings?.overtime || 0;
+    ytd.earnings.bonus += slip.earnings?.bonus || 0;
+    ytd.earnings.arrears += slip.earnings?.arrears || 0;
+    
+    ytd.deductions.pf += slip.deductions?.pf || 0;
+    ytd.deductions.esi += slip.deductions?.esi || 0;
+    ytd.deductions.tds += slip.deductions?.tds || 0;
+    ytd.deductions.professionalTax += slip.deductions?.professionalTax || 0;
+    ytd.deductions.lop += slip.deductions?.lop || 0;
+  });
+  
+  // Add current month
+  ytd.earnings.basic += parseFloat(basic.toFixed(2));
+  ytd.earnings.hra += parseFloat(hra.toFixed(2));
+  ytd.earnings.travelAllowance += parseFloat(travel.toFixed(2));
+  ytd.earnings.medicalAllowance += parseFloat(medical.toFixed(2));
+  ytd.earnings.specialAllowance += parseFloat(special.toFixed(2));
+  ytd.earnings.overtime += overtimePay;
+  ytd.earnings.totalEarnings = Object.values(ytd.earnings).reduce((a, b) => a + b, 0);
+  
+  ytd.deductions.pf += pfEmployee;
+  ytd.deductions.esi += esiEmployee;
+  ytd.deductions.tds += tds;
+  ytd.deductions.professionalTax += professionalTax;
+  ytd.deductions.lop += lopDeduction;
+  ytd.deductions.totalDeductions = Object.values(ytd.deductions).reduce((a, b) => a + b, 0);
 
   return {
     earnings: {
@@ -180,6 +281,30 @@ if ((esiConfig?.enabled !== false) && grossBeforeLOP < 21000) {
     daysPresent:       parseFloat(daysPresent.toFixed(1)),
     lopDays:           parseFloat(lopDays.toFixed(2)),
     overtimeHours:     parseFloat((att.overtimeHours || 0).toFixed(2)),
+    
+    // Employer contributions
+    employerContributions: {
+      pf:    pfEmployer,
+      esi:   parseFloat((grossBeforeLOP * ((policy?.taxCompliance?.esi?.employerRate ?? 3.25) / 100)).toFixed(2)),
+      gratuity: policy?.taxCompliance?.gratuityEnabled ? parseFloat((basic * ((policy?.taxCompliance?.gratuityRate ?? 4.81) / 100)).toFixed(2)) : 0
+    },
+    
+    // Tax information
+    taxRegime: policy?.tdsConfig?.taxRegime || 'new',
+    taxBreakdown: taxBreakdown ? {
+      taxableIncome: taxBreakdown.taxableIncome,
+      grossTax: taxBreakdown.grossTax,
+      rebate87A: taxBreakdown.rebate87A,
+      surcharge: taxBreakdown.surcharge,
+      cess: taxBreakdown.cess,
+      totalTax: taxBreakdown.totalTax,
+    } : null,
+    
+    // Year-to-Date
+    ytd: {
+      earnings: ytd.earnings,
+      deductions: ytd.deductions
+    }
   };
 };
 

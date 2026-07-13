@@ -154,9 +154,18 @@ exports.raiseSwapRequest = async (payload, user) => {
     requesterEmployee, targetUnitId, user.orgId, user.companyId
   );
 
-  // approvalType — default EMPLOYEE_THEN_MANAGER
-  // Future: read from unit AttendancePolicy config
-  const approvalType = "EMPLOYEE_THEN_MANAGER";
+  // CRITICAL GAP 3: Read approvalType from AttendancePolicy (dynamic)
+  // Default to EMPLOYEE_THEN_MANAGER if no policy found
+  const AttendancePolicy = require("../attendancePolicy/models/attendancePolicy.model");
+  const policy = await AttendancePolicy.findOne({
+    org_id:     toObjId(user.orgId),
+    company_id: toObjId(user.companyId),
+    unit_id:    toObjId(targetUnitId),
+    status:     "active",
+    isDeleted:  false,
+  }).select("shiftSwapApprovalType").lean();
+
+  const approvalType = policy?.shiftSwapApprovalType || "EMPLOYEE_THEN_MANAGER";
 
   const initialStatus = approvalType === "MANAGER_ONLY"
     ? "PENDING_APPROVAL"
@@ -231,6 +240,58 @@ exports.raiseSwapRequest = async (payload, user) => {
     // Email failure non-fatal — swap request already created
   }
 
+  // ── In-App Notification to B (EMPLOYEE_THEN_MANAGER) or Manager (MANAGER_ONLY) ──
+  // Matrix Requirement: Shift Swap Requested (🔔+📱) Priority: 🟡 Important
+  try {
+    const sendNotification = require("../../utils/sendNotification");
+    
+    if (approvalType === "EMPLOYEE_THEN_MANAGER" && requestedEmployee?.userId) {
+      await sendNotification({
+        type:          "SHIFT_SWAP_REQUESTED",
+        userId:        requestedEmployee.userId,
+        org_id:        user.orgId,
+        unit_id:       targetUnitId,
+        referenceId:   swapRequest._id,
+        referenceType: "ShiftSwapRequest",
+        data: {
+          requesterName:  requesterEmployee.name,
+          colleagueName:  requesterEmployee.name,
+          swapDate:       fmtDate(swapDateObj),
+          requesterShift: swapRequest.requesterShiftName,
+          requestedShift: swapRequest.requestedShiftName,
+          reason,
+          swapRequestId:  swapRequest._id.toString(),
+        },
+        inApp:  true,   // In-app notification ✓
+        push:   true    // Push notification ✓
+      });
+      console.log(`[raiseSwapRequest] ✅ In-app notification sent to B: ${requestedEmployee.userId}`);
+    } else if (approvalType === "MANAGER_ONLY" && manager?._id) {
+      await sendNotification({
+        type:          "SHIFT_SWAP_REQUESTED",
+        userId:        manager._id,
+        org_id:        user.orgId,
+        unit_id:       targetUnitId,
+        referenceId:   swapRequest._id,
+        referenceType: "ShiftSwapRequest",
+        data: {
+          requesterName:  requesterEmployee.name,
+          colleagueName:  requestedEmployee.name,
+          swapDate:       fmtDate(swapDateObj),
+          requesterShift: swapRequest.requesterShiftName,
+          requestedShift: swapRequest.requestedShiftName,
+          reason,
+          swapRequestId:  swapRequest._id.toString(),
+        },
+        inApp:  true,
+        push:   true
+      });
+      console.log(`[raiseSwapRequest] ✅ In-app notification sent to Manager: ${manager._id}`);
+    }
+  } catch (notifErr) {
+    console.error(`[raiseSwapRequest] ⚠️ Notification failed:`, notifErr.message);
+  }
+
   return swapRequest;
 };
 
@@ -285,7 +346,7 @@ exports.respondToSwap = async (id, payload, user) => {
     });
     await swap.save();
 
-    // Notify A
+    // Notify A (email)
     try {
       const requesterUser = await User.findById(swap.requesterUserId)
         .select("name email").lean();
@@ -304,6 +365,31 @@ exports.respondToSwap = async (id, payload, user) => {
       }
     } catch (_) {}
 
+    // ── In-App Notification to A (Requester) ──
+    // Matrix Requirement: Shift Swap Declined (🔔+📱) Priority: 🟡 Important
+    try {
+      const sendNotification = require("../../utils/sendNotification");
+      await sendNotification({
+        type:          "SHIFT_SWAP_DECLINED",
+        userId:        swap.requesterUserId,
+        org_id:        swap.org_id,
+        unit_id:       swap.unit_id,
+        referenceId:   swap._id,
+        referenceType: "ShiftSwapRequest",
+        data: {
+          colleagueName:  requestedEmployee?.name || "Colleague",
+          swapDate:       fmtDate(swap.swapDate),
+          comment,
+          swapRequestId:  swap._id.toString(),
+        },
+        inApp:  true,
+        push:   true
+      });
+      console.log(`[respondToSwap] ✅ Notification sent to A: ${swap.requesterUserId}`);
+    } catch (notifErr) {
+      console.error(`[respondToSwap] ⚠️ Notification failed:`, notifErr.message);
+    }
+
     return { message: "Swap request declined", swap };
   }
 
@@ -321,7 +407,7 @@ exports.respondToSwap = async (id, payload, user) => {
   });
   await swap.save();
 
-  // Notify manager
+  // Notify manager (email)
   try {
     if (swap.managerId) {
       const manager = await User.findById(swap.managerId).select("name email").lean();
@@ -344,6 +430,64 @@ exports.respondToSwap = async (id, payload, user) => {
       }
     }
   } catch (_) {}
+
+  // ── In-App Notification to A (Requester) ──
+  // Matrix Requirement: Shift Swap Accepted (🔔+📱) Priority: 🟡 Important
+  try {
+    const sendNotification = require("../../utils/sendNotification");
+    await sendNotification({
+      type:          "SHIFT_SWAP_ACCEPTED",
+      userId:        swap.requesterUserId,
+      org_id:        swap.org_id,
+      unit_id:       swap.unit_id,
+      referenceId:   swap._id,
+      referenceType: "ShiftSwapRequest",
+      data: {
+        colleagueName:  requestedEmployee?.name || "Colleague",
+        swapDate:       fmtDate(swap.swapDate),
+        comment,
+        swapRequestId:  swap._id.toString(),
+      },
+      inApp:  true,
+      push:   true
+    });
+    console.log(`[respondToSwap] ✅ Accept notification sent to A: ${swap.requesterUserId}`);
+  } catch (notifErr) {
+    console.error(`[respondToSwap] ⚠️ Notification failed:`, notifErr.message);
+  }
+
+  // ── In-App Notification to Manager ──
+  // Matrix Requirement: Shift Swap Manager Approval Required (🔔+📱)
+  try {
+    if (swap.managerId) {
+      const sendNotification = require("../../utils/sendNotification");
+      const requesterEmployee = await Employee.findById(swap.requesterEmployeeId)
+        .select("name").lean();
+      
+      await sendNotification({
+        type:          "SHIFT_SWAP_REQUESTED",
+        userId:        swap.managerId,
+        org_id:        swap.org_id,
+        unit_id:       swap.unit_id,
+        referenceId:   swap._id,
+        referenceType: "ShiftSwapRequest",
+        data: {
+          requesterName:  requesterEmployee?.name || "Requester",
+          colleagueName:  requestedEmployee?.name || "Requested",
+          swapDate:       fmtDate(swap.swapDate),
+          requesterShift: swap.requesterShiftName,
+          requestedShift: swap.requestedShiftName,
+          reason:         swap.reason,
+          swapRequestId:  swap._id.toString(),
+        },
+        inApp:  true,
+        push:   true
+      });
+      console.log(`[respondToSwap] ✅ Notification sent to Manager: ${swap.managerId}`);
+    }
+  } catch (notifErr) {
+    console.error(`[respondToSwap] ⚠️ Manager notification failed:`, notifErr.message);
+  }
 
   return { message: "Swap request accepted — awaiting manager approval", swap };
 };
@@ -522,11 +666,11 @@ exports.listSwapRequests = async (query, user) => {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(Number(limit))
-    .populate("requesterEmployeeId", "name employeeId")
-    .populate("requestedEmployeeId", "name employeeId")
-    .populate("requesterShiftId",    "name startTime endTime")
-    .populate("requestedShiftId",    "name startTime endTime")
-    .populate("managerId",           "name email")
+    .populate({ path: "requesterEmployeeId", select: "name employeeId email", model: "Employee" })
+    .populate({ path: "requestedEmployeeId", select: "name employeeId email", model: "Employee" })
+    .populate({ path: "requesterShiftId",    select: "name startTime endTime" })
+    .populate({ path: "requestedShiftId",    select: "name startTime endTime" })
+    .populate({ path: "managerId",           select: "name email" })
     .lean();
 
   return { swaps, total, page: Number(page), totalPages: Math.ceil(total / Number(limit)) };
@@ -540,11 +684,11 @@ exports.getSwapRequestById = async (id, user) => {
     company_id: toObjId(user.companyId),
     is_deleted: false,
   })
-    .populate("requesterEmployeeId", "name employeeId departmentId")
-    .populate("requestedEmployeeId", "name employeeId departmentId")
-    .populate("requesterShiftId",    "name startTime endTime shiftType")
-    .populate("requestedShiftId",    "name startTime endTime shiftType")
-    .populate("managerId",           "name email")
+    .populate({ path: "requesterEmployeeId", select: "name employeeId departmentId email", model: "Employee" })
+    .populate({ path: "requestedEmployeeId", select: "name employeeId departmentId email", model: "Employee" })
+    .populate({ path: "requesterShiftId",    select: "name startTime endTime shiftType" })
+    .populate({ path: "requestedShiftId",    select: "name startTime endTime shiftType" })
+    .populate({ path: "managerId",           select: "name email" })
     .lean();
 
   if (!swap) throw new AppError("Swap request not found", 404);
@@ -643,6 +787,7 @@ const _notifyBothOnFinalDecision = async (swap, decision, comment, managerName) 
       comment,
     };
 
+    // Email notifications
     if (requesterUser) {
       await sendEmail({
         to:      requesterUser.email,
@@ -657,7 +802,56 @@ const _notifyBothOnFinalDecision = async (swap, decision, comment, managerName) 
         html:    shiftSwapStatusEmailTemplate({ toName: requestedUser.name, ...emailData }),
       });
     }
-  } catch (_) {}
+
+    // ── In-App Notifications (🔔+📱) for both A and B ──
+    // Matrix Requirement: Shift Swap Approved/Rejected → Both employees
+    const sendNotification = require("../../utils/sendNotification");
+    const notifType = decision === "APPROVED" ? "SHIFT_SWAP_APPROVED" : "SHIFT_SWAP_REJECTED";
+
+    // Notify A (requester)
+    if (requesterUser) {
+      await sendNotification({
+        type:          notifType,
+        userId:        swap.requesterUserId,
+        org_id:        swap.org_id,
+        unit_id:       swap.unit_id,
+        referenceId:   swap._id,
+        referenceType: "ShiftSwapRequest",
+        data: {
+          swapDate:       fmtDate(swap.swapDate),
+          managerName,
+          comment,
+          swapRequestId:  swap._id.toString(),
+        },
+        inApp:  true,
+        push:   true
+      }).catch((err) => console.error(`[Shift Swap] A notification failed:`, err.message));
+    }
+
+    // Notify B (requested)
+    if (requestedUser) {
+      await sendNotification({
+        type:          notifType,
+        userId:        swap.requestedUserId,
+        org_id:        swap.org_id,
+        unit_id:       swap.unit_id,
+        referenceId:   swap._id,
+        referenceType: "ShiftSwapRequest",
+        data: {
+          swapDate:       fmtDate(swap.swapDate),
+          managerName,
+          comment,
+          swapRequestId:  swap._id.toString(),
+        },
+        inApp:  true,
+        push:   true
+      }).catch((err) => console.error(`[Shift Swap] B notification failed:`, err.message));
+    }
+
+    console.log(`[_notifyBothOnFinalDecision] ✅ Notifications sent to both A and B`);
+  } catch (err) {
+    console.error(`[_notifyBothOnFinalDecision] ⚠️ Failed:`, err.message);
+  }
 };
 
 // ─── EMAIL TEMPLATES (inline — same pattern as leaveStatus.js) ──

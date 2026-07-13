@@ -49,6 +49,54 @@ const unitSchema = new mongoose.Schema(
       default: null,
     },
 
+    // ─── GeoLocation for Attendance Validation ─────────────────
+    geolocation: {
+      latitude: {
+        type:    Number,
+        min:     -90,
+        max:     90,
+        default: null
+      },
+      longitude: {
+        type:    Number,
+        min:     -180,
+        max:     180,
+        default: null
+      },
+      radiusMeters: {
+        type:    Number,
+        min:     10,     // Min 10 meters
+        max:     5000,   // Max 5km radius
+        default: 200     // Default 200m
+      },
+      address: {
+        formatted: { type: String, trim: true, default: null },
+        street:    { type: String, trim: true, default: null },
+        city:      { type: String, trim: true, default: null },
+        state:     { type: String, trim: true, default: null },
+        stateCode: { type: String, trim: true, default: null },
+        country:   { type: String, trim: true, default: null },
+        countryCode: { type: String, uppercase: true, default: null },
+        pincode:   { type: String, trim: true, default: null }
+      }
+    },
+
+    // ─── Location-based Settings ───────────────────────────────
+    locationSettings: {
+      geoFencingEnabled: {
+        type:    Boolean,
+        default: false   // Legacy units will have this false
+      },
+      allowOutsidePunch: {
+        type:    Boolean,
+        default: false   // If true, allow punch outside radius with warning
+      },
+      requireExactMatch: {
+        type:    Boolean,
+        default: false   // If true, strict radius check
+      }
+    },
+
     status: {
       type:    String,
       enum:    ["Active", "Inactive"],

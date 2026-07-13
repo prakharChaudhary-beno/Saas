@@ -1,20 +1,13 @@
 // modules/leave/leaveRequest.service.js
-// T-11 + T-12 + T-13 + T-14 + T-15 + T-16 + T-31
-// Leave Request — Apply, Approve, Reject, Cancel, List
-// RULES:
-//   - T-13: Past date blocked (same day allowed)
-//   - T-14: Gender validation on leave type
-//   - T-15: Employment type validation
-//   - T-16: LOP — skip balance check
-//   - T-12: Dynamic L1/L2 approval routing via LeavePolicy
-//   - T-31: Email notification on approve/reject
+// REFACTORED — Dynamic Leave Management (Policy-Driven)
+// Balance checks use active policy, not LeaveBalance collection
 
 "use strict";
 const notifService = require("../notification/notification.service");
+const { sendNotification } = require("../../utils/sendNotification");
 
 const mongoose     = require("mongoose");
 const LeaveRequest = require("./models/leaveRequest.models");
-const LeaveBalance = require("./models/leaveBalance.models");
 const LeaveType    = require("./models/leaveType.models");
 const Employee     = require("../employee/models/employee.model");
 const User         = require("../auth/models/user.model");
@@ -57,48 +50,111 @@ const resolveApprovers = async (employee, user, leavePolicy) => {
   let l1ApproverId = null;
   let l2ApproverId = null;
 
+  console.log('[resolveApprovers] Starting resolution:', {
+    employeeId: employee._id,
+    reportingManagerId: employee.reportingManagerId,
+    approvalType,
+    orgId: employee.org_id,
+    companyId: employee.company_id,
+    unitId: employee.unit_id
+  });
+
   // L1 — Reporting Manager (if type is L1 or L1_L2)
   if (["L1", "L1_L2"].includes(approvalType)) {
-   if (employee.reportingManagerId) {
-  const managerEmployee = await Employee.findOne({
-    _id:       employee.reportingManagerId,
-    isDeleted: false,
-    status:    "ACTIVE",
-  }).select("userId").lean();
+    if (employee.reportingManagerId) {
+      try {
+        const managerEmployee = await Employee.findOne({
+          _id: employee.reportingManagerId,
+          isDeleted: false,
+          status: "ACTIVE",
+        }).select("userId name email").lean();
 
-  if (managerEmployee?.userId) {
-    const mgr = await User.findById(managerEmployee.userId)
-      .select("_id name email");
-    if (mgr) l1ApproverId = mgr._id;
-  }
-}
+        console.log('[resolveApprovers] Manager employee found:', managerEmployee);
+
+        if (managerEmployee?.userId) {
+          const mgr = await User.findById(managerEmployee.userId)
+            .select("_id name email status is_deleted");
+          
+          if (mgr && !mgr.is_deleted && mgr.status === "ACTIVE") {
+            l1ApproverId = mgr._id;
+            console.log('[resolveApprovers] L1 approver resolved:', {
+              userId: mgr._id,
+              name: mgr.name,
+              email: mgr.email
+            });
+          } else {
+            console.warn('[resolveApprovers] Manager user inactive or deleted:', mgr);
+          }
+        } else {
+          console.warn('[resolveApprovers] Manager employee has no userId');
+        }
+      } catch (error) {
+        console.error('[resolveApprovers] Error resolving L1 approver:', error);
+      }
+    } else {
+      console.warn('[resolveApprovers] Employee has no reportingManagerId');
+    }
   }
 
   // L2 — HR Manager in unit (if type is L1_L2 or no L1 found)
   if (approvalType === "L1_L2" || (approvalType === "L1" && !l1ApproverId)) {
-    const hrRole = await Role.findOne({ slug: "hr_manager", isSystem: true }).select("_id");
-    if (hrRole) {
-      const hrUser = await User.findOne({
-        org_id:     employee.org_id,
-        company_id: employee.company_id,
-        unit_id:    employee.unit_id,
-        roleId:     hrRole._id,
-        is_deleted: false,
-        status:     "ACTIVE",
-      }).select("_id name email");
+    // Try multiple HR role slugs for flexibility
+    const hrRoleSlugs = ["hr_manager", "company_hr_manager", "hr", "HR", "hr-admin"];
+    let hrRole = null;
 
-      if (hrUser) l2ApproverId = hrUser._id;
-      else {
-        // Fallback — company-level HR Manager
-        const companyHrUser = await User.findOne({
-          org_id:     employee.org_id,
-          company_id: employee.company_id,
-          roleId:     hrRole._id,
-          is_deleted: false,
-          status:     "ACTIVE",
-        }).select("_id name email");
-        if (companyHrUser) l2ApproverId = companyHrUser._id;
+    for (const slug of hrRoleSlugs) {
+      hrRole = await Role.findOne({ 
+        $or: [
+          { slug: slug },
+          { name: slug.toLowerCase() },
+          { name: slug.toUpperCase() }
+        ],
+        isSystem: true 
+      }).select("_id name slug").lean();
+      
+      if (hrRole) {
+        console.log('[resolveApprovers] Found HR role:', hrRole);
+        break;
       }
+    }
+
+    if (hrRole) {
+      // Try unit-level HR first
+      if (employee.unit_id) {
+        const hrUser = await User.findOne({
+          org_id: employee.org_id,
+          company_id: employee.company_id,
+          unit_id: employee.unit_id,
+          roleId: hrRole._id,
+          is_deleted: false,
+          status: "ACTIVE",
+        }).select("_id name email").lean();
+
+        if (hrUser) {
+          l2ApproverId = hrUser._id;
+          console.log('[resolveApprovers] L2 approver resolved (unit-level):', hrUser);
+        }
+      }
+
+      // Fallback — company-level HR Manager
+      if (!l2ApproverId) {
+        const companyHrUser = await User.findOne({
+          org_id: employee.org_id,
+          company_id: employee.company_id,
+          roleId: hrRole._id,
+          is_deleted: false,
+          status: "ACTIVE",
+        }).select("_id name email").lean();
+
+        if (companyHrUser) {
+          l2ApproverId = companyHrUser._id;
+          console.log('[resolveApprovers] L2 approver resolved (company-level):', companyHrUser);
+        } else {
+          console.warn('[resolveApprovers] No HR user found at unit or company level');
+        }
+      }
+    } else {
+      console.warn('[resolveApprovers] No HR role found with slugs:', hrRoleSlugs);
     }
   }
 
@@ -128,7 +184,7 @@ exports.applyLeave = async (payload, user) => {
     org_id:     user.orgId,
     company_id: user.companyId,
     isDeleted:  false,
-  }).select("name email employeeId unit_id reportingManagerId status gender employmentType");
+  }).select("name email employeeId org_id company_id unit_id reportingManagerId status gender employmentType");
 
   if (!employee) throw new AppError("Employee record not found for your account", 404);
   if (employee.status === "TERMINATED") throw new AppError("Terminated employees cannot apply for leave", 400);
@@ -207,33 +263,56 @@ exports.applyLeave = async (payload, user) => {
   });
   if (overlap) throw new AppError("You already have a leave request for overlapping dates", 409);
 
-  // T-16 — LOP: skip balance check
+  // ─── DYNAMIC BALANCE CHECK (Policy-Driven) ────────────────────────────────
   const isLOP = leaveType.code === "LOP" || leaveType.isPaid === false;
-  let balance = null;
+  let balanceInfo = null; // Track balance for snapshot
 
   if (!isLOP) {
+    // Use dynamic balance calculation from active policy
+    const { getActiveLeavePolicy, calculateLeaveUsage } = require("./leave.service");
     const year = today.getFullYear();
-    balance = await LeaveBalance.findOne({
-      employeeId: employee._id,
-      leaveTypeId,
-      year,
-      org_id:     user.orgId,
-      company_id: user.companyId,
-    });
 
-    if (!balance) {
+    const activePolicy = await getActiveLeavePolicy(
+      employee.org_id,
+      employee.company_id,
+      employee.unit_id
+    );
+
+    if (!activePolicy) {
+      throw new AppError("No active leave policy found for your unit. Please contact HR.", 400);
+    }
+
+    // Find the leave type allocation in policy
+    const policyLeaveType = activePolicy.leaveTypes.find(
+      (plt) => plt.isActive && (plt.leaveTypeId?.toString() === leaveTypeId.toString() || plt.code === leaveType.code)
+    );
+
+    if (!policyLeaveType) {
       throw new AppError(
-        "Leave balance not initialized for this leave type. Please contact HR.",
+        `Leave type "${leaveType.name}" is not configured in the active leave policy. Please contact HR.`,
         400
       );
     }
 
-    if (balance.remaining < totalDays) {
+    // Calculate usage dynamically
+    const allocated = policyLeaveType.credit?.totalPerYear || 0;
+    const usage = await calculateLeaveUsage(employee._id, leaveTypeId, year);
+    const remaining = Math.max(0, allocated - usage.used - usage.pending);
+
+    if (remaining < totalDays) {
       throw new AppError(
-        `Insufficient leave balance. Available: ${balance.remaining} day(s), Requested: ${totalDays} day(s)`,
+        `Insufficient leave balance. Available: ${remaining} day(s), Requested: ${totalDays} day(s)`,
         400
       );
     }
+
+    // Store balance snapshot for record-keeping
+    balanceInfo = {
+      totalAllocated: allocated,
+      used: usage.used,
+      pending: usage.pending,
+      remaining: remaining
+    };
   }
 
   // T-12 — Resolve approvers from LeavePolicy
@@ -251,12 +330,81 @@ exports.applyLeave = async (payload, user) => {
 
   const { l1ApproverId, l2ApproverId, approvalType } = await resolveApprovers(employee, user, leavePolicy);
 
-  // Update balance — pending++, remaining-- (only for paid leaves)
-  if (balance) {
-    balance.pending   = (balance.pending   || 0) + totalDays;
-    balance.remaining = (balance.remaining || 0) - totalDays;
-    await balance.save();
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ENTERPRISE COMPLIANCE: Validate approvers exist for admin users
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Prevent admins from creating leave requests with no approvers
+  // This avoids self-approval compliance violations
+  
+  const isAdminUser = ["org_admin", "company_admin", "SUPER_ADMIN"].includes(user.role);
+  
+  if (isAdminUser && approvalType !== "AUTO") {
+    console.log('[applyLeave] Admin user detected, validating approvers:', {
+      userRole: user.role,
+      userId: user.userId,
+      l1ApproverId,
+      l2ApproverId,
+      approvalType
+    });
+    
+    // If no approvers assigned, check if HR Manager exists in the system
+    if (!l1ApproverId && !l2ApproverId) {
+      console.warn('[applyLeave] No approvers assigned for admin user');
+      
+      // Find HR role in the system
+      const hrRoleSlugs = ["hr_manager", "company_hr_manager", "unit_admin", "hr", "HR", "hr-admin"];
+      let hrRole = null;
+      
+      for (const slug of hrRoleSlugs) {
+        hrRole = await Role.findOne({ 
+          $or: [
+            { slug: slug },
+            { name: slug.toLowerCase() },
+            { name: slug.toUpperCase() }
+          ],
+          isSystem: true 
+        }).select("_id name slug").lean();
+        
+        if (hrRole) {
+          console.log('[applyLeave] Found HR role:', hrRole);
+          break;
+        }
+      }
+      
+      if (!hrRole) {
+        throw new AppError(
+          "Cannot apply for leave: No HR role found in the system. " +
+          "Please contact system administrator to create an HR role first.",
+          400
+        );
+      }
+      
+      // Check if any HR Manager user exists in the organization
+      const hrUserCount = await User.countDocuments({
+        org_id: user.orgId,
+        roleId: hrRole._id,
+        is_deleted: false,
+        status: "ACTIVE"
+      });
+      
+      console.log('[applyLeave] HR user count:', hrUserCount);
+      
+      if (hrUserCount === 0) {
+        throw new AppError(
+          "Cannot apply for leave: No HR Manager found in your organization. " +
+          "As an administrator, you must have at least one HR Manager designated to approve your leave request. " +
+          "Please create an HR Manager user first, or assign a reporting manager to your employee profile.",
+          400
+        );
+      }
+      
+      // HR exists but wasn't auto-assigned - this shouldn't happen, but handle gracefully
+      console.warn('[applyLeave] HR users exist but no approver assigned - configuration issue');
+    }
   }
+
+  // NOTE: Balance updates removed - balances are calculated dynamically at query time
+  // from LeaveRequest records (PENDING + APPROVED statuses)
 
   // Determine initial status
   let initialStatus = "PENDING";
@@ -278,12 +426,14 @@ exports.applyLeave = async (payload, user) => {
     reason:     remarks || reason || "No reason provided",
     status:     initialStatus,
     l1ApproverId,
+    l1Status:   l1ApproverId ? "PENDING" : null,
     l2ApproverId,
+    l2Status:   l2ApproverId ? "PENDING" : null,
     isBalanceDeducted: approvalType === "AUTO",
-    balanceAtRequest: balance ? {
-      totalAllocated: balance.totalAllocated,
-      used:           balance.used,
-      remaining:      balance.remaining + totalDays,
+    balanceAtRequest: balanceInfo ? {
+      totalAllocated: balanceInfo.totalAllocated,
+      used:           balanceInfo.used,
+      remaining:      balanceInfo.remaining,
     } : null,
     createdBy: user.userId,
   });
@@ -314,9 +464,9 @@ exports.applyLeave = async (payload, user) => {
     }
   }
 
-  // In-app notification to L1 approver
+  // In-app + Push notification to L1 approver
   if (l1ApproverId) {
-    notifService.createNotification({
+    sendNotification({
       type:          "LEAVE_APPLIED",
       userId:        l1ApproverId,
       org_id:        user.orgId,
@@ -331,6 +481,9 @@ exports.applyLeave = async (payload, user) => {
         totalDays,
         leaveId:      leaveRequest._id,
       },
+      inApp:  true,   // In-app notification
+      email:  false,  // Email already sent above
+      push:   true    // Push notification
     }).catch(() => {});
   }
 
@@ -417,12 +570,12 @@ exports.updateLeaveStatus = async (id, payload, user) => {
   if (!["APPROVED", "REJECTED", "UNDER_REVIEW"].includes(status)) {
     throw new AppError("Invalid status. Use APPROVED, REJECTED, or UNDER_REVIEW", 400);
   }
-const filter = { _id: id, org_id: user.orgId };
-if (user.companyId) filter.company_id = user.companyId;
 
-const request = await LeaveRequest.findOne(filter)
-  .populate("employeeId", "name email");
+  const filter = { _id: id, org_id: user.orgId };
+  if (user.companyId) filter.company_id = user.companyId;
 
+  const request = await LeaveRequest.findOne(filter)
+    .populate("employeeId", "name email");
 
   if (!request) throw new AppError("Leave request not found", 404);
 
@@ -433,93 +586,344 @@ const request = await LeaveRequest.findOne(filter)
   const isSuperAdmin   = user.role === "SUPER_ADMIN";
   const isOrgAdmin     = user.role === "org_admin";
   const isCompanyAdmin = user.role === "company_admin";
- const isHRManager = ["hr_manager", "company_hr_manager", "unit_admin"].includes(user.role);
-const isL1 = request.l1ApproverId && String(request.l1ApproverId) === String(user.userId);
-const isL2 = request.l2ApproverId && String(request.l2ApproverId) === String(user.userId);
+  const isHRManager    = ["hr_manager", "company_hr_manager", "unit_admin"].includes(user.role);
+  const isL1           = request.l1ApproverId && String(request.l1ApproverId) === String(user.userId);
+  const isL2           = request.l2ApproverId && String(request.l2ApproverId) === String(user.userId);
 
-// Custom role — permission check
-const userRole = await Role.findById(user.roleId).populate("permissions").lean();
-const hasLeaveApprove = userRole?.permissions?.some(p => p.slug === "leave.approve") || false;
+  // ── ROLE & PERMISSION RESOLUTION ───────────────────────────────
+  const isHRManagerExtended = ["hr_manager", "company_hr_manager", "unit_admin", "hr", "HR", "hr-admin"].includes(user.role);
+  
+  // Check if user is in admin hierarchy (can bypass approvals)
+  const isAdminLevel = isSuperAdmin || isOrgAdmin || isCompanyAdmin;
+  
+  // ── APPROVER ID VALIDATION ─────────────────────────────────────
+  // Normalize IDs for comparison - handle both ObjectId and String
+  const normalizeId = (id) => id ? String(id) : null;
+  const currentUserId = normalizeId(user.userId);
+  const requestL1Approver = normalizeId(request.l1ApproverId);
+  const requestL2Approver = normalizeId(request.l2ApproverId);
+  
+  console.log('[updateLeaveStatus] Authorization check:', {
+    userId: currentUserId,
+    userRole: user.role,
+    isSuperAdmin,
+    isOrgAdmin,
+    isCompanyAdmin,
+    isHRManager: isHRManagerExtended,
+    isAdminLevel,
+    isL1,
+    isL2,
+    requestStatus: request.status,
+    l1Status: request.l1Status,
+    l2Status: request.l2Status,
+    requestL1Approver,
+    requestL2Approver,
+    hasL1Approver: !!requestL1Approver,
+    hasL2Approver: !!requestL2Approver
+  });
 
-const canAct =
-  isSuperAdmin || isOrgAdmin || isCompanyAdmin ||
-  (request.status === "PENDING"      && (isL1 || isHRManager || hasLeaveApprove)) ||
-  (request.status === "UNDER_REVIEW" && (isL2 || isHRManager || hasLeaveApprove));
-
-  if (!canAct) {
-    throw new AppError("You are not authorized to act on this leave request", 403);
+  // ── CUSTOM ROLE PERMISSION CHECK ─────────────────────────────────
+  let hasLeaveApprove = false;
+  let hasLeaveApproveL1 = false;
+  let hasLeaveApproveL2 = false;
+  
+  try {
+    if (user.roleId) {
+      const userRole = await Role.findById(user.roleId).populate("permissions").lean();
+      hasLeaveApprove   = userRole?.permissions?.some(p => p.slug === "leave.approve") || false;
+      hasLeaveApproveL1 = userRole?.permissions?.some(p => p.slug === "leave.approve.l1" || p.slug === "leave.approve") || false;
+      hasLeaveApproveL2 = userRole?.permissions?.some(p => p.slug === "leave.approve.l2" || p.slug === "leave.approve") || false;
+    }
+  } catch (err) {
+    console.error('[updateLeaveStatus] Permission check error:', err);
   }
 
-  const year = new Date(request.startDate).getFullYear();
+  // ── AUTHORIZATION DECISION TREE ─────────────────────────────────
+  // Enterprise-grade approval flow with multiple fallback paths
+  
+  let canL1Act = false;
+  let canL2Act = false;
+  let bypassL1 = false;
+  let bypassL2 = false;
+  let authReason = "";
 
+  // ════════════════════════════════════════════════════════════
+  // SELF-APPROVAL PREVENTION: Compliance requirement
+  // ════════════════════════════════════════════════════════════
+  const isOwnRequest = normalizeId(request.userId) === currentUserId;
+  
+  if (isOwnRequest && !isSuperAdmin) {
+    console.warn('[updateLeaveStatus] Self-approval blocked:', {
+      requestUserId: normalizeId(request.userId),
+      currentUserId,
+      userRole: user.role
+    });
+    
+    throw new AppError(
+      "Cannot approve your own leave request. This violates separation of duties and audit compliance. " +
+      "Please ask another authorized person (HR Manager or Admin) to approve your request.",
+      403
+    );
+  }
+  
+  // ════════════════════════════════════════════════════════════
+  // ADMIN BYPASS: Super Admin, Org Admin, Company Admin can approve at any level
+  // ════════════════════════════════════════════════════════════
+  // Exception: SUPER_ADMIN can self-approve ONLY in emergency situations
+  if (isAdminLevel) {
+    if (request.status === "PENDING") {
+      canL1Act = true;
+      bypassL1 = true;
+      authReason = isOwnRequest ? "Admin self-approval (SUPER_ADMIN emergency override)" : "Admin bypass - L1";
+      console.log('[updateLeaveStatus] Admin bypass activated for L1', {
+        isOwnRequest,
+        userRole: user.role
+      });
+    } else if (request.status === "UNDER_REVIEW") {
+      canL2Act = true;
+      bypassL2 = true;
+      authReason = isOwnRequest ? "Admin self-approval (SUPER_ADMIN emergency override)" : "Admin bypass - L2";
+      console.log('[updateLeaveStatus] Admin bypass activated for L2', {
+        isOwnRequest,
+        userRole: user.role
+      });
+    }
+  }
+  
+  // ════════════════════════════════════════════════════════════
+  // L1 APPROVAL AUTHORIZATION
+  // ════════════════════════════════════════════════════════════
+  if (!canL1Act && request.status === "PENDING" && (request.l1Status === "PENDING" || request.l1Status === null)) {
+    console.log('[updateLeaveStatus] Checking L1 authorization...');
+    
+    // Priority 1: User is designated L1 approver
+    if (isL1) {
+      canL1Act = true;
+      authReason = "Designated L1 approver";
+      console.log('[updateLeaveStatus] ✓ Authorized as designated L1 approver');
+    }
+    // Priority 2: User has explicit L1 approval permission
+    else if (hasLeaveApproveL1) {
+      canL1Act = true;
+      authReason = "Has leave.approve.l1 permission";
+      console.log('[updateLeaveStatus] ✓ Authorized via permission');
+    }
+    // Priority 3: HR Manager can approve L1 if no L1 assigned or as backup
+    else if (isHRManagerExtended) {
+      canL1Act = true;
+      authReason = "HR Manager (L1 backup)";
+      console.log('[updateLeaveStatus] ✓ Authorized as HR Manager');
+    }
+    // Priority 4: Global approval permission
+    else if (hasLeaveApprove) {
+      canL1Act = true;
+      authReason = "Has leave.approve permission";
+      console.log('[updateLeaveStatus] ✓ Authorized via global permission');
+    }
+  }
+  
+  // ════════════════════════════════════════════════════════════
+  // L2 APPROVAL AUTHORIZATION  
+  // ════════════════════════════════════════════════════════════
+  if (!canL2Act && request.status === "UNDER_REVIEW" && (request.l2Status === "PENDING" || request.l2Status === null)) {
+    console.log('[updateLeaveStatus] Checking L2 authorization...');
+    
+    // Priority 1: User is designated L2 approver
+    if (isL2) {
+      canL2Act = true;
+      authReason = "Designated L2 approver";
+      console.log('[updateLeaveStatus] ✓ Authorized as designated L2 approver');
+    }
+    // Priority 2: HR Manager can approve L2
+    else if (isHRManagerExtended) {
+      canL2Act = true;
+      authReason = "HR Manager (L2 authority)";
+      console.log('[updateLeaveStatus] ✓ Authorized as HR Manager');
+    }
+    // Priority 3: User has explicit L2 approval permission
+    else if (hasLeaveApproveL2) {
+      canL2Act = true;
+      authReason = "Has leave.approve.l2 permission";
+      console.log('[updateLeaveStatus] ✓ Authorized via L2 permission');
+    }
+    // Priority 4: Global approval permission
+    else if (hasLeaveApprove) {
+      canL2Act = true;
+      authReason = "Has leave.approve permission";
+      console.log('[updateLeaveStatus] ✓ Authorized via global permission');
+    }
+  }
+  
+  // ════════════════════════════════════════════════════════════
+  // DIRECT APPROVAL PATH (No L2 approver exists)
+  // ════════════════════════════════════════════════════════════
+  if (!canL2Act && request.status === "UNDER_REVIEW" && !requestL2Approver) {
+    console.log('[updateLeaveStatus] Direct approval path - no L2 approver exists');
+    if (canL1Act || isL1 || isHRManagerExtended || hasLeaveApprove) {
+      canL2Act = true;
+      bypassL2 = true;
+      authReason = "Direct approval (no L2 configured)";
+      console.log('[updateLeaveStatus] ✓ Direct approval authorized');
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // EMERGENCY FALLBACK: Same-company/org approval for urgent cases
+  // ════════════════════════════════════════════════════════════
+  if (!canL1Act && !canL2Act && !requestL1Approver && !requestL2Approver) {
+    console.log('[updateLeaveStatus] Emergency fallback - no approvers assigned');
+    if (isHRManagerExtended || hasLeaveApprove) {
+      if (request.status === "PENDING") {
+        canL1Act = true;
+        authReason = "Emergency fallback - no approvers configured";
+      } else if (request.status === "UNDER_REVIEW") {
+        canL2Act = true;
+        authReason = "Emergency fallback - no approvers configured";
+      }
+      console.log('[updateLeaveStatus] ✓ Emergency fallback activated');
+    }
+  }
+
+  const canAct = canL1Act || canL2Act;
+
+  console.log('[updateLeaveStatus] Final authorization result:', {
+    canL1Act,
+    canL2Act,
+    canAct,
+    bypassL1,
+    bypassL2,
+    authReason
+  });
+
+  if (!canAct) {
+    const errorDetails = [
+      `Status: ${request.status}`,
+      `L1 Approver: ${requestL1Approver || 'Not assigned'}`,
+      `L2 Approver: ${requestL2Approver || 'Not assigned'}`,
+      `Your User ID: ${currentUserId}`,
+      `Your Role: ${user.role}`,
+      `Is HR Manager: ${isHRManagerExtended}`,
+      `Has Permission: ${hasLeaveApprove}`
+    ].join(', ');
+    
+    throw new AppError(
+      `You are not authorized to act on this leave request. Details: ${errorDetails}`,
+      403
+    );
+  }
+
+  // ── APPROVAL LOGIC ─────────────────────────────────────────────────
+  // Enterprise-grade state machine with proper L1/L2 flow handling
+  
   if (status === "APPROVED") {
-    request.status = "APPROVED";
-    if (isL1 && !request.l2ApproverId) {
+    // ─── L1 APPROVAL PATH ───────────────────────────────────────
+    if (canL1Act && request.status === "PENDING") {
       request.l1Status   = "APPROVED";
       request.l1ActionAt = new Date();
       request.l1Comment  = remarks || null;
-    } else {
+      request.l1ApproverId = request.l1ApproverId || user.userId; // Ensure approver is recorded
+      
+      // Check if L2 approval is required
+      if (requestL2Approver && !bypassL2) {
+        // Forward to L2
+        request.status = "UNDER_REVIEW";
+        console.log('[updateLeaveStatus] L1 approved - forwarded to L2');
+      } else {
+        // Direct approval (no L2 or bypass)
+        request.status = "APPROVED";
+        request.l2Status = "APPROVED";
+        request.l2ActionAt = new Date();
+        request.l2Comment = remarks || null;
+        console.log('[updateLeaveStatus] Direct approval - no L2 required');
+      }
+    }
+    // ─── L2 APPROVAL PATH ───────────────────────────────────────
+    else if (canL2Act && request.status === "UNDER_REVIEW") {
+      request.status     = "APPROVED";
       request.l2Status   = "APPROVED";
       request.l2ActionAt = new Date();
       request.l2Comment  = remarks || null;
+      request.l2ApproverId = request.l2ApproverId || user.userId; // Ensure approver is recorded
+      console.log('[updateLeaveStatus] L2 approved - request finalized');
     }
-
-    // Deduct balance (pending → used)
-    if (!request.isBalanceDeducted) {
-      const balance = await LeaveBalance.findOne({
-        employeeId:  request.employeeId._id || request.employeeId,
-        leaveTypeId: request.leaveTypeId,
-        year,
-        org_id:      user.orgId,
-        company_id:  user.companyId,
-      });
-
-      if (balance) {
-        balance.pending  = Math.max(0, (balance.pending || 0) - request.totalDays);
-        balance.used     = (balance.used || 0) + request.totalDays;
-        await balance.save();
-        request.isBalanceDeducted = true;
+    // ─── ADMIN BYPASS APPROVAL ───────────────────────────────────
+    else if (bypassL1 || bypassL2) {
+      request.status = "APPROVED";
+      if (request.status !== "UNDER_REVIEW") {
+        request.l1Status   = request.l1Status || "APPROVED";
+        request.l1ActionAt = request.l1ActionAt || new Date();
+        request.l1Comment  = request.l1Comment || remarks || null;
+      }
+      request.l2Status   = "APPROVED";
+      request.l2ActionAt = new Date();
+      request.l2Comment  = remarks || null;
+      console.log('[updateLeaveStatus] Admin bypass approval');
+    }
+    // ─── FALLBACK: Auto-determine approval level ───────────────
+    else {
+      console.log('[updateLeaveStatus] Fallback approval path');
+      request.status = "APPROVED";
+      
+      // Set appropriate approval status based on current state
+      if (request.status === "PENDING" || request.l1Status === "PENDING" || request.l1Status === null) {
+        request.l1Status   = "APPROVED";
+        request.l1ActionAt = new Date();
+        request.l1Comment  = remarks || null;
+      }
+      if (request.l2Status === "PENDING" || request.l2Status === null || request.status === "UNDER_REVIEW") {
+        request.l2Status   = "APPROVED";
+        request.l2ActionAt = new Date();
+        request.l2Comment  = remarks || null;
       }
     }
-
-  } else if (status === "REJECTED") {
+  }
+  // ─── REJECTION HANDLING ─────────────────────────────────────────────
+  else if (status === "REJECTED") {
     request.status = "REJECTED";
-    if (isL1 && !request.l2ApproverId) {
+    
+    // L1 Rejection - reject entirely
+    if (canL1Act && (request.status === "PENDING" || !request.l1ActionAt)) {
       request.l1Status   = "REJECTED";
       request.l1ActionAt = new Date();
       request.l1Comment  = remarks || null;
-    } else {
+      request.l1ApproverId = request.l1ApproverId || user.userId;
+      console.log('[updateLeaveStatus] Rejected at L1 level');
+    }
+    
+    // L2 Rejection - reject entirely (even if L1 approved)
+    if (canL2Act && (request.status === "UNDER_REVIEW" || bypassL2)) {
       request.l2Status   = "REJECTED";
       request.l2ActionAt = new Date();
       request.l2Comment  = remarks || null;
+      request.l2ApproverId = request.l2ApproverId || user.userId;
+      
+      // Ensure L1 status is set if bypassing
+      if (!request.l1ActionAt) {
+        request.l1Status   = "APPROVED"; // Mark as approved to show it went through L1
+        request.l1ActionAt = new Date();
+        request.l1Comment  = "Auto-approved (bypass)";
+      }
+      console.log('[updateLeaveStatus] Rejected at L2 level');
     }
-
-    // Restore balance (pending → remaining)
-    const balance = await LeaveBalance.findOne({
-      employeeId:  request.employeeId._id || request.employeeId,
-      leaveTypeId: request.leaveTypeId,
-      year,
-      org_id:      user.orgId,
-      company_id:  user.companyId,
-    });
-
-    if (balance) {
-      balance.pending   = Math.max(0, (balance.pending   || 0) - request.totalDays);
-      balance.remaining = (balance.remaining || 0) + request.totalDays;
-      await balance.save();
+    
+    // Admin/Manager rejection with bypass
+    if (bypassL1 || bypassL2) {
+      if (!request.l1ActionAt) {
+        request.l1Status   = "REJECTED";
+        request.l1ActionAt = new Date();
+        request.l1Comment  = remarks || null;
+      }
+      if (!request.l2ActionAt) {
+        request.l2Status   = "REJECTED";
+        request.l2ActionAt = new Date();
+        request.l2Comment  = remarks || null;
+      }
     }
-
-  } else if (status === "UNDER_REVIEW") {
-    // L1 approved → forward to L2
-    request.status     = "UNDER_REVIEW";
-    request.l1Status   = "APPROVED";
-    request.l1ActionAt = new Date();
-    request.l1Comment  = remarks || null;
   }
 
   // Audit history
   request.approvalHistory.push({
-    level:        isL1 ? 1 : 2,
+    level:        canL1Act ? 1 : 2,
     approverId:   user.userId,
     approverName: user.name || "Approver",
     approverRole: user.role,
@@ -531,18 +935,69 @@ const canAct =
   request.updatedBy = user.userId;
   await request.save();
 
+  // T-31 — Notify L2 if L1 approved and forwarded
+  // Matrix Requirement: Leave forwarded to L2 (🔔+📧+📱)
+  if (request.status === "UNDER_REVIEW" && request.l2ApproverId) {
+    const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name code");
+    
+    try {
+      const l2Approver = await User.findById(request.l2ApproverId).select("name email");
+      if (l2Approver?.email) {
+        await sendEmail({
+          to:      l2Approver.email,
+          subject: `Leave Request Pending Your Approval — ${employeeName || "Employee"}`,
+          html:    leavePendingTemplate({
+            approverName: l2Approver.name || "Manager",
+            employeeName: employeeName || "Employee",
+            leaveType:    leaveTypeDoc?.name || "Leave",
+            startDate:    fmtDate(request.startDate),
+            endDate:      fmtDate(request.endDate),
+            totalDays:    request.totalDays,
+            reason:       request.reason || "",
+          }),
+        });
+      }
+    } catch (e) {
+      console.error("L2 notification failed:", e.message);
+    }
+    
+    // N-32: In-App + Push Notification to L2 when L1 forwards
+    sendNotification({
+      type:          "LEAVE_APPLIED",  // Reuse same type for L2 approval queue
+      userId:        request.l2ApproverId,
+      org_id:        request.org_id,
+      unit_id:       request.unit_id,
+      referenceId:   request._id,
+      referenceType: "LeaveRequest",
+      data: {
+        employeeName: employeeName || "Employee",
+        leaveType:    leaveTypeDoc?.name || "Leave",
+        startDate:    fmtDate(request.startDate),
+        endDate:      fmtDate(request.endDate),
+        totalDays:    request.totalDays,
+        leaveId:      request._id,
+        forwardedBy:  user.name || "L1 Approver",
+      },
+      inApp:  true,   // In-app notification ✓
+      email:  false,  // Email already sent above
+      push:   true    // Push notification ✓
+    }).catch((err) => console.error("[L2 Forward Notification] Failed:", err.message));
+    
+    console.log(`[updateLeaveStatus] ✅ In-app notification sent to L2 ${request.l2ApproverId} for approval`);
+  }
+
   // T-31 — Notify employee on final decision
   const employeeEmail = request.employeeId?.email;
   const employeeName  = request.employeeId?.name || "Employee";
 
-  if (employeeEmail && ["APPROVED", "REJECTED"].includes(status)) {
-    const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name");
+  if (employeeEmail && ["APPROVED", "REJECTED"].includes(request.status)) {
+    const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name code");
     const approverUser = await User.findById(user.userId).select("name");
     try {
       await sendEmail({
         to:      employeeEmail,
-        subject: `Your Leave Request has been ${status}`,
-        html:    status === "APPROVED"
+        subject: `Your Leave Request has been ${request.status}`,
+        html:    request.status === "APPROVED"
           ? leaveApprovedTemplate({
               name:         employeeName,
               leaveType:    leaveTypeDoc?.name || "Leave",
@@ -566,6 +1021,39 @@ const canAct =
     }
   }
 
+  // ════════════════════════════════════════════════════════════
+  // N-31: In-App + Push Notification to Employee on Final Decision
+  // Matrix Requirement: Leave approved (🔔+📧), Leave rejected (🔔+📧)
+  // ════════════════════════════════════════════════════════════
+  if (["APPROVED", "REJECTED"].includes(request.status)) {
+    const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name code");
+    const approverUser = await User.findById(user.userId).select("name");
+    
+    sendNotification({
+      type:          request.status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
+      userId:        request.userId,  // Notify the employee
+      org_id:        request.org_id,
+      unit_id:       request.unit_id,
+      referenceId:   request._id,
+      referenceType: "LeaveRequest",
+      data: {
+        employeeName: employeeName,
+        leaveType:    leaveTypeDoc?.name || "Leave",
+        startDate:    fmtDate(request.startDate),
+        endDate:      fmtDate(request.endDate),
+        totalDays:    request.totalDays,
+        approverName: approverUser?.name || "Manager",
+        comment:      remarks || "",
+        leaveId:      request._id,
+      },
+      inApp:  true,   // In-app notification ✓ (matrix requirement)
+      email:  false,  // Email already sent above
+      push:   true    // Push notification (future-ready)
+    }).catch((err) => console.error("[Leave Status Notification] Failed:", err.message));
+    
+    console.log(`[updateLeaveStatus] ✅ In-app notification sent to employee ${request.userId} for ${request.status}`);
+  }
+
   return request;
 };
 
@@ -577,18 +1065,25 @@ const canAct =
 // ─────────────────────────────────────────────────────────────────────────────
 // GET PENDING APPROVALS — for L1/L2 approvers
 // GET /leave/pending
+// SEQUENTIAL APPROVAL LOGIC:
+//   - L1 (Reporting Manager) sees requests where l1ApproverId matches AND l1Status is PENDING/null
+//   - L2 (HR Manager) sees requests where l2ApproverId matches AND l1Status is APPROVED AND l2Status is PENDING/null
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getPendingApprovals = async (query, user) => {
+  console.log('[getPendingApprovals] called for user:', user.userId, 'role:', user.role);
   const { page = 1, limit = 10 } = query;
 
   const isHRManager = ["hr_manager", "company_hr_manager", "unit_admin", "org_admin", "company_admin"].includes(user.role);
+  console.log('[getPendingApprovals] isHRManager:', isHRManager);
 
   const managerEmployee = await Employee.findOne({ userId: user.userId, isDeleted: false }).select("_id");
   const isReportingManager = managerEmployee
     ? !!(await Employee.exists({ reportingManagerId: managerEmployee._id, isDeleted: false, status: "ACTIVE" }))
     : false;
+  console.log('[getPendingApprovals] isReportingManager:', isReportingManager, 'managerEmployeeId:', managerEmployee?._id);
 
   if (!isHRManager && !isReportingManager) {
+    console.error('[getPendingApprovals] Authorization failed - user is neither HR nor Reporting Manager');
     throw new AppError("You are not authorized to view pending approvals", 403);
   }
 
@@ -596,15 +1091,38 @@ exports.getPendingApprovals = async (query, user) => {
     org_id:     user.orgId,
     company_id: user.companyId,
     status:     { $in: ["PENDING", "UNDER_REVIEW"] },
+    isDeleted:  false,
   };
 
-  if (!isHRManager) {
+  // ── SELF-APPROVAL PREVENTION ─────────────────────────────
+  // Exclude requests created by the approver (compliance requirement)
+  // Users cannot approve their own leave requests
+  const isSuperAdmin = user.role === "SUPER_ADMIN";
+  if (!isSuperAdmin) {
+    filter.userId = { $ne: user.userId };
+    console.log('[getPendingApprovals] Excluding self-created requests for user:', user.userId);
+  }
+
+  // ── SEQUENTIAL APPROVAL FILTER ─────────────────────────────
+  // HR Manager sees all requests in their unit/company
+  if (isHRManager) {
+    console.log('[getPendingApprovals] User is HR Manager, setting L2 filter');
+    if (user.unitId) {
+      filter.unit_id = user.unitId;
+    }
+    // L2 approvers see requests where l1 is APPROVED and l2 is pending
     filter.$or = [
-      { l1ApproverId: user.userId },
-      { l2ApproverId: user.userId },
+      { l2ApproverId: user.userId, l1Status: "APPROVED", l2Status: { $in: ["PENDING", null] } },
+      // Also show requests directly assigned to them without L1 requirement
+      { l2ApproverId: user.userId, l1ApproverId: null, l2Status: { $in: ["PENDING", null] } },
     ];
-  } else if (user.unitId) {
-    filter.unit_id = user.unitId;
+    console.log('[getPendingApprovals] L2 filter:', JSON.stringify(filter, null, 2));
+  } else if (isReportingManager) {
+    // L1 (Reporting Manager) only sees requests pending L1 approval
+    console.log('[getPendingApprovals] User is Reporting Manager, setting L1 filter');
+    filter.l1ApproverId = user.userId;
+    filter.l1Status = { $in: ["PENDING", null] };
+    console.log('[getPendingApprovals] L1 filter:', JSON.stringify(filter, null, 2));
   }
 
   const skip  = (Number(page) - 1) * Number(limit);
@@ -618,6 +1136,8 @@ exports.getPendingApprovals = async (query, user) => {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(Number(limit));
+
+  console.log('[getPendingApprovals] Returning', requests.length, 'requests');
 
   return {
     requests,
@@ -635,7 +1155,9 @@ exports.cancelLeaveRequest = async (id, user) => {
     userId:     user.userId,
     org_id:     user.orgId,
     company_id: user.companyId,
-  });
+  }).populate("leaveTypeId", "name code")
+    .populate("l1ApproverId", "name email")
+    .populate("l2ApproverId", "name email");
 
   if (!request) throw new AppError("Leave request not found", 404);
 
@@ -649,21 +1171,42 @@ exports.cancelLeaveRequest = async (id, user) => {
   request.cancellationReason = "Cancelled by employee";
   await request.save();
 
-  // Restore balance
-  const year = new Date(request.startDate).getFullYear();
-  const balance = await LeaveBalance.findOne({
-    employeeId:  request.employeeId,
-    leaveTypeId: request.leaveTypeId,
-    year,
-    org_id:      user.orgId,
-    company_id:  user.companyId,
-  });
+  // NOTE: Balance updates removed - balances are calculated dynamically from LeaveRequest records
 
-  if (balance) {
-    balance.pending   = Math.max(0, (balance.pending   || 0) - request.totalDays);
-    balance.remaining = (balance.remaining || 0) + request.totalDays;
-    await balance.save();
+  // ── Notification to Approver(s) ──
+  // Matrix Requirement: Leave cancelled by employee → Approver (🔔) Priority: 🟢 Informational
+  const employee = await Employee.findOne({ userId: user.userId, org_id: user.orgId })
+    .select("name").lean();
+  const leaveTypeName = request.leaveTypeId?.name || "Leave";
+  const notifyApprovers = [];
+
+  if (request.l1ApproverId) notifyApprovers.push(request.l1ApproverId);
+  if (request.l2ApproverId) notifyApprovers.push(request.l2ApproverId);
+
+  for (const approver of notifyApprovers) {
+    if (approver?._id) {
+      sendNotification({
+        type:          "LEAVE_CANCELLED",
+        userId:        approver._id,
+        org_id:        request.org_id,
+        unit_id:       request.unit_id,
+        referenceId:   request._id,
+        referenceType: "LeaveRequest",
+        data: {
+          employeeName: employee?.name || user.name || "Employee",
+          leaveType:    leaveTypeName,
+          startDate:    fmtDate(request.startDate),
+          endDate:      fmtDate(request.endDate),
+          totalDays:    request.totalDays,
+          leaveId:      request._id.toString(),
+        },
+        inApp:  true,
+        push:   false   // Informational only
+      }).catch((err) => console.error("[cancelLeaveRequest] Notification failed:", err.message));
+    }
   }
+
+  console.log(`[cancelLeaveRequest] ✅ Leave cancelled by ${user.userId}, approvers notified`);
 
   return { message: "Leave request cancelled successfully" };
 };

@@ -106,8 +106,28 @@ exports.getAllPayslips = async (query, user) => {
 
   const filter = buildScope(user);
 
-  if (year)       filter.year   = Number(year);
-  if (month)      filter.month  = Number(month);
+  // Handle month - can be numeric (7) or date format (YYYY-MM)
+  if (month) {
+    const monthStr = String(month);
+    if (monthStr.includes('-')) {
+      const parts = monthStr.split('-');
+      const parsedMonth = parseInt(parts[1], 10);
+      if (!isNaN(parsedMonth) && parsedMonth >= 1 && parsedMonth <= 12) {
+        filter.month = parsedMonth;
+      }
+      if (!year) {
+        const parsedYear = parseInt(parts[0], 10);
+        if (!isNaN(parsedYear)) filter.year = parsedYear;
+      }
+    } else {
+      const parsedMonth = parseInt(monthStr, 10);
+      if (!isNaN(parsedMonth)) filter.month = parsedMonth;
+    }
+  }
+  if (year) {
+    const parsedYear = parseInt(String(year), 10);
+    if (!isNaN(parsedYear)) filter.year = parsedYear;
+  }
   if (status)     filter.status = status;
   if (employeeId) filter.employee_id = toObjId(employeeId);
 
@@ -173,13 +193,14 @@ exports.getPayslipById = async (id, user) => {
 // ─────────────────────────────────────────────────────────────
 // PUBLISH PAYSLIP — P-10, P-17, N-04
 // PATCH /api/v1/payslips/:id/publish
-// Sends email to employee
+// Sends email + in-app notification to employee
+// Matrix Requirement: Payslip Published (🔔+📧+📱) Priority: 🔴 Critical
 // ─────────────────────────────────────────────────────────────
 exports.publishPayslip = async (id, user) => {
   const payslip = await Payslip.findOne({
     _id:       toObjId(id),
     isDeleted: false,
-  }).populate("employee_id", "name employeeId email userId");
+  }).populate("employee_id", "name employeeId email userId unit_id org_id");
 
   if (!payslip) throw new AppError("Payslip not found", 404);
 
@@ -197,15 +218,21 @@ exports.publishPayslip = async (id, user) => {
   payslip.approvedAt = new Date();
   await payslip.save();
 
-  // Send email to employee — N-04, P-17
   const employee = payslip.employee_id;
+  
+  // Get company name for email
+  let companyName = "Your Company";
+  try {
+    const company = await Company.findById(payslip.company_id)
+      .select("company_name brand_name").lean();
+    companyName = company?.brand_name || company?.company_name || "Your Company";
+  } catch (e) {
+    console.error("Company lookup failed:", e.message);
+  }
+
+  // N-04: Send email to employee — Matrix Requirement: 📧 Email
   if (employee?.email) {
     try {
-      // Get company name
-      const company = await Company.findById(payslip.company_id)
-        .select("company_name brand_name").lean();
-      const companyName = company?.brand_name || company?.company_name || "Your Company";
-
       await sendEmail({
         to:      employee.email,
         subject: `Your Payslip for ${_monthName(payslip.month)} ${payslip.year} is Ready`,
@@ -229,6 +256,39 @@ exports.publishPayslip = async (id, user) => {
     } catch (emailErr) {
       // Non-fatal — payslip published even if email fails
       console.error("⚠️  Payslip email failed:", emailErr.message);
+    }
+  }
+
+  // N-04: In-App + Push Notification — Matrix Requirement: 🔔+📱
+  if (employee?.userId) {
+    try {
+      const sendNotification = require("../../../utils/sendNotification");
+      
+      await sendNotification({
+        type:          "PAYSLIP_PUBLISHED",
+        userId:        employee.userId,
+        org_id:        payslip.org_id || employee.org_id,
+        unit_id:       employee.unit_id,
+        referenceId:   payslip._id,
+        referenceType: "Payslip",
+        data: {
+          employeeName:    employee.name,
+          employeeId:      employee.employeeId,
+          month:           _monthName(payslip.month),
+          year:            payslip.year,
+          netSalary:       payslip.netSalary,
+          companyName,
+          payslipId:       payslip._id,
+        },
+        inApp:  true,   // In-app notification ✓
+        email:  false,  // Email already sent above
+        push:   true    // Push notification ✓
+      });
+      
+      console.log(`[publishPayslip] ✅ In-app + Push notification sent to employee ${employee.userId}`);
+    } catch (notifErr) {
+      // Non-fatal — payslip published even if notification fails
+      console.error("[publishPayslip] ⚠️ Notification failed:", notifErr.message);
     }
   }
 

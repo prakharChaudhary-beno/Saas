@@ -29,9 +29,15 @@ exports.list = async (req, res) => {
 
     const departments = await departmentService.getDepartments(req.user);
 
+    // Transform _id to id for frontend tree view compatibility
+    const transformDept = (d) => ({
+      ...d.toObject ? d.toObject() : d,
+      id: d._id.toString(),
+    });
+
     res.json({
       success: true,
-      data: departments
+      data: departments.map(transformDept)
     });
 
   } catch (error) {

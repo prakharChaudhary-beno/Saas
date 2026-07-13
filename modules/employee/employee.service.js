@@ -19,9 +19,10 @@ const bcrypt           = require("bcryptjs");
 const { sendEmail }    = require("../../utils/email/email");
 const { credentialsTemplate } = require("../../utils/email/templates/credentials");
 const EmployeeDocument = require("./models/employeeDocument.model");
-const { seedLeaveBalances } = require("../../utils/seedLeaveBalances"); // T-17
+// seedLeaveBalances removed - balances are now calculated dynamically from policy
 const Subscription = require("../subscription/models/subscription.Models"); // T-27
 const auditService = require("../auditLogs/auditLog.service");
+const Roster        = require("../shift/models/roster.model"); // CRITICAL: import Roster for cascade delete
 
 // ─── Build scope filter from req.user ─────────────────────────
 // Org Admin sees all employees in org
@@ -161,14 +162,7 @@ exports.createEmployee = async (payload, user) => {
     createdBy:  user.userId
   });
 
-  // T-17 — Auto seed leave balances (non-fatal)
-  await seedLeaveBalances(
-    employee._id,
-    user.orgId,
-    user.companyId,
-    employeeUnitId,
-    user.userId
-  );
+  // NOTE: Leave balance seeding removed - balances calculated dynamically from active policy
 
   return await Employee.findById(employee._id)
     .populate("departmentId",       "name")
@@ -194,7 +188,10 @@ exports.getEmployees = async (user, query) => {
   if (designationId)  filter.designationId  = designationId;
   if (employmentType) filter.employmentType = employmentType;
   if (status)         filter.status         = status;
-  if (unit_id)        filter.unit_id        = unit_id;
+  
+  // Enterprise Data Isolation: Only allow unit_id override if user has NO unitId
+  // Unit admins cannot query other units' employees
+  if (unit_id && !user.unitId) filter.unit_id = unit_id;
 
   if (search) {
     filter.$or = [
@@ -398,6 +395,13 @@ exports.deleteEmployee = async (id, user) => {
   if (employee.userId) {
     await User.findByIdAndUpdate(employee.userId, { status: "INACTIVE" });
   }
+
+  // CRITICAL GAP 2: Revoke all active rosters for this employee
+  // This prevents orphaned roster assignments when employee is deleted
+  await Roster.updateMany(
+    { employee_id: employee._id, status: "ACTIVE", is_deleted: false },
+    { $set: { status: "REVOKED", revokedAt: new Date(), revokedBy: user.userId, revokeReason: "Employee deleted" } }
+  );
 
   employee.isDeleted = true;
   employee.updatedBy = user.userId;

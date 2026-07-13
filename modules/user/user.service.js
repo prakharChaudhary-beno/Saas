@@ -6,7 +6,9 @@ const Employee = require("../employee/models/employee.model");
 const UserProgression = require("./models/userProgression.model");
 const Role = require("../role/role.model");
 const Department = require("../department/department.model");
+const Designation = require("../designation/designation.model");
 const Company = require("../company/models/company.model");
+const Unit = require("../unit/models/unit.model");
 const Joi = require("joi");
 const mongoose = require("mongoose");
 
@@ -16,6 +18,7 @@ const { sendEmail } = require("../../utils/email/email");
 const inviteTemplate = require("../../utils/email/templates/inviteEmail");
 
 const { invalidateEmployeeCache } = require("../../utils/policyResolver");
+
 // ── Scope filter ──────────────────────────────────────────
 const buildScopeFilter = (user) => {
   if (user.role === "SUPER_ADMIN") return {};
@@ -132,6 +135,115 @@ exports.inviteUser = async (data, currentUser) => {
 
     user = createdUsers[0];
 
+    // ─────────────────────────────────────────────────────────────
+    // CREATE EMPLOYEE RECORD FOR USER (HRMS STANDARD)
+    // Every user (including admins) needs an Employee record for:
+    // - Attendance (punch in/out)
+    // - Leave management
+    // - Payroll
+    // - Analytics/headcount
+    // ─────────────────────────────────────────────────────────────
+    
+    // Determine unit_id for employee
+    // Priority: 1) Passed in request body, 2) Role level is 'unit' → use currentUser's unit
+    let employeeUnitId = unit_id;
+    if (!employeeUnitId && role.level === 'unit') {
+      employeeUnitId = currentUser.unitId;
+    }
+    // If still no unit_id but role needs unit (like unit_admin), use the unit_id from user we just created
+    if (!employeeUnitId && user.unit_id) {
+      employeeUnitId = user.unit_id;
+    }
+    
+    // For unit-level roles, we MUST have a unit_id
+    if (role.level === 'unit' && !employeeUnitId) {
+      employeeUnitId = currentUser.unitId || user.unit_id;
+    }
+    
+    // Determine company_id
+    const employeeCompanyId = user.company_id || currentUser.companyId;
+    
+    // Only create Employee if we have all required fields
+    if (employeeUnitId && employeeCompanyId && user.org_id) {
+      // Find or create department for the user
+      let empDepartmentId = resolvedDepartmentId;
+      
+      if (!empDepartmentId) {
+        // For admin roles, create/find "Administration" department
+        let adminDept = await Department.findOne({
+          company_id: employeeCompanyId,
+          org_id: user.org_id,
+          unit_id: employeeUnitId,
+          name: { $regex: /^(Administration|Admin|HR)$/i },
+          isDeleted: false,
+        }).session(session);
+        
+        if (!adminDept) {
+          const [createdDept] = await Department.create([{
+            name: 'Administration',
+            company_id: employeeCompanyId,
+            org_id: user.org_id,
+            unit_id: employeeUnitId,
+            status: 'active',
+            created_by: currentUser.userId,
+          }], { session });
+          adminDept = createdDept;
+        }
+        empDepartmentId = adminDept._id;
+      }
+      
+      // Find or create designation based on role name
+      let designation = await Designation.findOne({
+        company_id: employeeCompanyId,
+        org_id: user.org_id,
+        unit_id: employeeUnitId,
+        name: { $regex: new RegExp(`^(${role.name}|Admin|Manager)$`, 'i') },
+        isDeleted: false,
+      }).session(session);
+      
+      if (!designation) {
+        const [createdDesig] = await Designation.create([{
+          name: role.name,
+          company_id: employeeCompanyId,
+          org_id: user.org_id,
+          unit_id: employeeUnitId,
+          status: 'active',
+          created_by: currentUser.userId,
+        }], { session });
+        designation = createdDesig;
+      }
+      
+      // Generate employee ID
+      const employeeCount = await Employee.countDocuments({
+        org_id: user.org_id,
+        company_id: employeeCompanyId,
+      }).session(session);
+      const employeeId = `EMP${String(employeeCount + 1).padStart(5, '0')}`;
+      
+      // Create Employee record
+      await Employee.create([{
+        org_id: user.org_id,
+        company_id: employeeCompanyId,
+        unit_id: employeeUnitId,
+        userId: user._id,
+        employeeId,
+        name: user.name,
+        email: user.email,
+        phone: user.phone || '0000000000',
+        departmentId: empDepartmentId,
+        designationId: designation._id,
+        employmentType: 'FULL_TIME',
+        joiningDate: new Date(),
+        status: 'ACTIVE',
+        salary: {
+          basic: 0,
+          hra: 0,
+          grossSalary: 0,
+          netSalary: 0,
+        },
+      }], { session });
+    }
+
     await session.commitTransaction();
     session.endSession();
 
@@ -176,6 +288,7 @@ exports.inviteUser = async (data, currentUser) => {
 // ─────────────────────────────────────────────────────────────
 // GET USERS
 // GET /users?page=1&limit=10&search=&status=&roleId=&departmentId=
+// Returns users based on caller's level, EXCLUDING employees
 // ─────────────────────────────────────────────────────────────
 exports.getUsers = async (query, currentUser) => {
   const { page = 1, limit = 10, search, status, roleId, departmentId } = query;
@@ -185,19 +298,50 @@ exports.getUsers = async (query, currentUser) => {
     is_deleted: false,
   };
 
+  // ── LEVEL-BASED FILTERING: Exclude employees from admin users list ──
+  const Role = require("../role/role.model");
+  
+  // Find the employee role to exclude
+  const employeeRole = await Role.findOne({ slug: "employee" }).select("_id").lean();
+  
+  // Exclude employee role from results - employees are managed separately
+  if (employeeRole) {
+    filter.roleId = { $ne: employeeRole._id };
+  }
+
   // T-25 — Filter by role type (Administrative/Privilege/General)
   if (query.roleType) {
-    const Role = require("../role/role.model");
     const matchingRoles = await Role.find({
       userClass: query.roleType,
       isDeleted: false,
     }).select("_id");
-    filter.roleId = { $in: matchingRoles.map(r => r._id) };
+    
+    // Combine with employee exclusion
+    const matchingRoleIds = matchingRoles.map(r => r._id);
+    if (employeeRole) {
+      filter.roleId = { 
+        $in: matchingRoleIds,
+        $ne: employeeRole._id 
+      };
+    } else {
+      filter.roleId = { $in: matchingRoleIds };
+    }
   }
 
   if (search) filter.email  = { $regex: search, $options: "i" };
   if (status) filter.status = status;
-  if (roleId) filter.roleId = roleId;
+  
+  // Specific roleId filter - but still exclude employee
+  if (roleId) {
+    if (employeeRole && roleId === employeeRole._id.toString()) {
+      // If trying to filter by employee role, return empty
+      return {
+        users: [],
+        pagination: { total: 0, page: Number(page), limit: Number(limit), pages: 0 }
+      };
+    }
+    filter.roleId = roleId;
+  }
 
   // departmentId — Employee model se matching userIds
   if (departmentId) {

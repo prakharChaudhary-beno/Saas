@@ -255,6 +255,10 @@ exports.updateEmployee = async (id, data, user) => {
 
   const employee = await Employee.findOne(filter);
   if (!employee) throw new AppError("Employee not found", 404);
+  const isOwnRecord = employee.userId && String(employee.userId) === String(user.userId);
+  if (isOwnRecord && data.status && data.status !== employee.status) {
+    throw new AppError("You cannot change your own employment status", 400);
+  }
 
   // Restricted fields - NEVER allow these to be updated by anyone
   const restricted = ["email", "employeeId", "org_id", "company_id", "unit_id", "userId", "createdBy", "isDeleted"];
@@ -408,6 +412,11 @@ exports.deleteEmployee = async (id, user) => {
 
   const employee = await Employee.findOne(filter);
   if (!employee) throw new AppError("Employee not found", 404);
+
+  // Self-lockout prevention — you can never delete your own employee record
+  if (employee.userId && String(employee.userId) === String(user.userId)) {
+    throw new AppError("You cannot delete your own employee record", 400);
+  }
 
   if (employee.status === "ACTIVE") {
     throw new AppError("Active employee cannot be deleted. Terminate or deactivate first.", 400);

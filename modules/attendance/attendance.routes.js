@@ -82,10 +82,12 @@ router.post(
   attendanceController.punchIn
 );
 
-// POST /hrms/me/attendance/punch-out — punch out (attendance.update permission)
+// POST /hrms/me/attendance/punch-out — punch out (attendance.create permission - self-service)
+// Enterprise HRMS: Punch-out is a self-service action like punch-in.
+// Employees who can punch in should be able to punch out without additional permissions.
 router.post(
   "/me/punch-out",
-  checkPermission("attendance.update"),
+  checkPermission("attendance.create"),
   validate(attendanceValidation.punchOut),
   attendanceController.punchOut
 );
@@ -93,6 +95,13 @@ router.post(
 // ─────────────────────────────────────────────────────────────
 // MANAGER routes (Team Attendance)
 // ─────────────────────────────────────────────────────────────
+
+// GET /hrms/attendance/clocked-in — Get all currently clocked-in employees
+router.get(
+  "/clocked-in",
+  checkPermission("attendance.read"),
+  attendanceController.getAllClockedIn
+);
 
 // GET /hrms/attendance/team — manager sees their team's attendance
 router.get(

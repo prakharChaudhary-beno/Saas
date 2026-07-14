@@ -256,33 +256,54 @@ exports.updateEmployee = async (id, data, user) => {
   const employee = await Employee.findOne(filter);
   if (!employee) throw new AppError("Employee not found", 404);
 
-  // Restricted fields
+  // Restricted fields - NEVER allow these to be updated by anyone
   const restricted = ["email", "employeeId", "org_id", "company_id", "unit_id", "userId", "createdBy", "isDeleted"];
   restricted.forEach(f => delete data[f]);
 
-  // E-08 — Employee self-service: only limited fields allowed
-const EMPLOYEE_SELF_UPDATE_FIELDS = ["phone", "address", "emergencyContact", "profilePhoto"];
-if (user.role === "employee") {
-  const emp = await Employee.findOne({
-    userId:    user.userId,
-    isDeleted: false,
-  }).select("_id").lean();
+  // E-08 — Employee self-service: can update personal details except salary/documents
+  // Fields EMPLOYEES CAN update for themselves
+  const EMPLOYEE_ALLOWED_FIELDS = [
+    "name", "phone", "alternatePhone", "dateOfBirth", "gender", "bloodGroup", 
+    "maritalStatus", "profilePhoto", "about",
+    "currentAddress", "permanentAddress",
+    "emergencyContact"
+  ];
 
-  if (!emp || String(emp._id) !== String(id)) {
-    throw new AppError("You can only update your own profile", 403);
+  // Fields EMPLOYEES CANNOT update (admin/HR only)
+  const EMPLOYEE_RESTRICTED_FIELDS = [
+    "departmentId", "designationId", "reportingManagerId", 
+    "employmentType", "joiningDate", "confirmationDate", 
+    "status", "exitDate", "exitReason",
+    "salary", "bankDetails",
+    "documents"
+  ];
+
+  if (user.role === "employee") {
+    const emp = await Employee.findOne({
+      userId: user.userId,
+      isDeleted: false,
+    }).select("_id").lean();
+
+    if (!emp || String(emp._id) !== String(id)) {
+      throw new AppError("You can only update your own profile", 403);
+    }
+
+    // Remove restricted fields from data
+    EMPLOYEE_RESTRICTED_FIELDS.forEach(f => delete data[f]);
+
+    // Check if any remaining fields are not in allowed list
+    const attempts = Object.keys(data).filter(key => !EMPLOYEE_ALLOWED_FIELDS.includes(key));
+    if (attempts.length > 0) {
+      console.log(`Employee attempted to update restricted fields: ${attempts.join(", ")}`);
+    }
+
+    if (Object.keys(data).length === 0) {
+      throw new AppError(
+        "You can update: personal info, address, emergency contact, profile photo, and about section",
+        400
+      );
+    }
   }
-
-  Object.keys(data).forEach(key => {
-    if (!EMPLOYEE_SELF_UPDATE_FIELDS.includes(key)) delete data[key];
-  });
-
-  if (Object.keys(data).length === 0) {
-    throw new AppError(
-      `Employees can only update: ${EMPLOYEE_SELF_UPDATE_FIELDS.join(", ")}`,
-      400
-    );
-  }
-}
 
 
   // Status change security

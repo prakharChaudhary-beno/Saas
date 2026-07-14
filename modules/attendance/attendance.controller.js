@@ -160,3 +160,21 @@ exports.regularize = async (req, res, next) => {
     next(err);
   }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /hrms/attendance/clocked-in
+// Get all currently clocked-in employees with their profile info
+// ─────────────────────────────────────────────────────────────────────────────
+exports.getAllClockedIn = async (req, res, next) => {
+  try {
+    const result = await attendanceService.getAllClockedIn(req.user);
+
+    return res.status(200).json({
+      success: true,
+      message: "Clocked-in employees fetched successfully",
+      data:    result,
+    });
+  } catch (err) {
+    next(err);
+  }
+};

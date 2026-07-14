@@ -934,3 +934,49 @@ exports.regularize = async (attendanceId, data, user) => {
 
   return record;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Get all currently clocked-in employees with their profile info
+// ─────────────────────────────────────────────────────────────────────────────
+exports.getAllClockedIn = async (user) => {
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  // Find all attendance records for today where checkOut is null (still clocked in)
+  const clockedInRecords = await Attendance.find({
+    org_id: user.orgId,
+    company_id: user.companyId,
+    unit_id: user.unitId,
+    date: today,
+    checkOut: null, // Still clocked in
+    isDeleted: false
+  }).populate({
+    path: 'employeeId',
+    select: '_id userId name email phone profilePhoto designationId departmentId',
+    populate: [
+      { path: 'designationId', select: 'name' },
+      { path: 'departmentId', select: 'name' }
+    ]
+  }).lean();
+
+  // Format the response with employee profile info
+  const result = clockedInRecords.map(record => ({
+    attendanceId: record._id,
+    employeeId: record.employeeId._id,
+    name: record.employeeId.name,
+    email: record.employeeId.email,
+    phone: record.employeeId.phone,
+    profilePhoto: record.employeeId.profilePhoto,
+    designation: record.employeeId.designationId?.name || null,
+    department: record.employeeId.departmentId?.name || null,
+    checkIn: record.checkIn,
+    workingHours: record.workingHours,
+    status: record.status,
+    isWFH: record.isWFH || false
+  }));
+
+  return {
+    total: result.length,
+    employees: result
+  };
+};

@@ -219,10 +219,13 @@ const readOnlySlugs = allSlugs.filter(
         level:       "unit",
         userClass:   "Privilege",
         modules:     ["hrms"],
-        description: "Approves leave and attendance for their team. Views team reports. Cannot edit employee records.",
+        description: "Approves leave and attendance for their team. Views team reports. Cannot edit employee records. Can mark own attendance.",
         permissions: getIds([
+          "attendance.create",    // Can punch in (own attendance)
+          "attendance.read",      // Can view attendance (own + team)
+          "attendance.update",    // Can punch out (own attendance)
+          "attendance.approve",   // Can approve team attendance
           "employee.read",
-          "attendance.read", "attendance.approve",
           "leave.read", "leave.approve",
           "payroll.read",
           "department.read",
@@ -242,7 +245,7 @@ const readOnlySlugs = allSlugs.filter(
         modules:     ["hrms"],
         description: "Self-service only. Apply leave, mark attendance, view own payslip and profile.",
         permissions: getIds([
-          "attendance.create", "attendance.read",
+          "attendance.create", "attendance.update", "attendance.read",  // Can punch in and out
           "leave.create", "leave.read",
           "payroll.read",
         ]),

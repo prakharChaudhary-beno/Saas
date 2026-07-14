@@ -2,6 +2,7 @@ const jwt          = require("jsonwebtoken");
 const bcrypt       = require("bcryptjs");
 const AppError     = require("../../utils/appError");
 const User         = require("../auth/models/user.model");
+const Employee     = require("../employee/models/employee.model");
 const Permission   = require("../permission/permission.model");
 const Role         = require("../role/role.model");
 const Subscription = require("../subscription/models/subscription.Models");
@@ -135,10 +136,14 @@ exports.login = async (payload) => {
       { expiresIn: "1d" }
     );
 
+    // ── Find Employee record for this user ─────────────────────
+    const employee = await Employee.findOne({ userId: user._id }).select("_id").lean();
+
     return {
       token,
       is_first_login: user.is_first_login,
       user: {
+        _id:             employee?._id || null,  // Employee _id for profile redirect
         id:              user._id,
         name:            user.name,
         email:           user.email,

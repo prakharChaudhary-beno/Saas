@@ -19,6 +19,66 @@ const bulkImportController = require("./employeeBulkImport.controller")
 const bulkExportController = require("./employeeBulkExport.controller")
 const templateController = require("./employeeTemplate.controller")
 
+// ── Self-access OR Permission check middleware ────────────────────────────────
+// Enterprise HRMS: Employees can always access their own profile
+// Admins/HR need permission to access others
+const checkSelfOrPermission = (permission) => async (req, res, next) => {
+  const Employee = require("./models/employee.model");
+  
+  console.log('🔥🔥🔥 checkSelfOrPermission MIDDLEWARE CALLED 🔥🔥🔥');
+  console.log('Permission being checked:', permission);
+  console.log('Request params:', req.params);
+  console.log('Request user:', req.user);
+  
+  try {
+    console.log('=== Self-Access Check Debug ===');
+    console.log('URL param id (req.params.id):', req.params.id);
+    console.log('Request user.userId:', req.user.userId);
+
+    // Find current user's employee record
+    const emp = await Employee.findOne({
+      userId: req.user.userId,
+      isDeleted: false
+    }).select("_id userId").lean();
+
+    console.log('Database query result (emp):', emp);
+    
+    if (!emp) {
+      console.log('❌ No employee record found for user');
+      return res.status(404).json({
+        success: false,
+        message: "Employee profile not found"
+      });
+    }
+
+    // Compare employee IDs
+    const empIdStr = emp._id.toString();
+    const urlIdStr = req.params.id.toString();
+    
+    console.log('Comparing IDs:');
+    console.log('  Employee _id from DB:', empIdStr);
+    console.log('  URL param id:', urlIdStr);
+    console.log('  Match result:', empIdStr === urlIdStr);
+
+    // If viewing/updating own profile → ALLOW (no permission needed)
+    if (empIdStr === urlIdStr) {
+      console.log('✅ SELF-ACCESS GRANTED - Own profile');
+      return next();
+    }
+
+    // If accessing someone else → CHECK PERMISSION (existing logic preserved)
+    console.log('❌ ACCESSING OTHER - Permission required:', permission);
+    return checkPermission(permission)(req, res, next);
+    
+  } catch (error) {
+    console.error('[Self-Access Check Error]', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Error checking profile access" 
+    });
+  }
+};
+
 router.get("/me", authenticate, employeeController.getMyProfile);
 
 // ── Excel Template Download ──────────────────────────────────────────────────
@@ -108,16 +168,14 @@ router.get(
 router.get(
   "/:id",
   authenticate,
-  
-  checkPermission("employee.read"),
+  checkSelfOrPermission("employee.read"),
   employeeController.getEmployeeById
 );
 
 router.put(
   "/:id",
   authenticate,
-  
-  checkPermission("employee.update"),
+  checkSelfOrPermission("employee.update"),
   validate(updateEmployeeSchema),
   employeeController.updateEmployee
 );
@@ -140,6 +198,46 @@ router.post(
 );
 
 
+// Profile photo upload - Self-access OR permission
+router.post(
+  "/:id/upload-profile",
+  authenticate,
+  checkSelfOrPermission("employee.update"),
+  upload.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No file uploaded"
+        });
+      }
+
+      const Employee = require("./models/employee.model");
+      const employee = await Employee.findByIdAndUpdate(
+        req.params.id,
+        { profilePhoto: req.file.path },
+        { new: true }
+      );
+
+      if (!employee) {
+        return res.status(404).json({
+          success: false,
+          message: "Employee not found"
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Profile photo uploaded successfully",
+        data: { profilePhoto: employee.profilePhoto }
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.post(
   "/:id/documents",
   authenticate,
@@ -152,16 +250,14 @@ router.post(
 router.get(
   "/:id/documents",
   authenticate,
-  
-  checkPermission("employee.read"),
+  checkSelfOrPermission("employee.read"),
   employeeController.getDocuments
 );
 
 router.delete(
   "/:id/documents/:docId",
   authenticate,
-  
-  checkPermission("employee.update"),
+  checkSelfOrPermission("employee.update"),
   employeeController.deleteDocument
 );
 

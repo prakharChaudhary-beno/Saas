@@ -38,14 +38,33 @@ exports.getDepartments = async (user, query = {}) => {
   const { unit_id, search } = query;
   const filter = { isDeleted: false, ...buildFilter(user) };
 
-  // Allow filtering by specific unit_id (for Org/Company Admin)
   if (unit_id && !user.unitId) filter.unit_id = unit_id;
-
   if (search) filter.name = { $regex: search, $options: "i" };
 
-  return await Department.find(filter)
+  const departments = await Department.find(filter)
     .populate("unit_id", "name")
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean();
+
+  // ── Employee count per department (single query, no N+1) ──────
+  const Employee = require("../employee/models/employee.model");
+  const counts = await Employee.aggregate([
+    {
+      $match: {
+        departmentId: { $in: departments.map(d => d._id) },
+        isDeleted: false,
+      },
+    },
+    { $group: { _id: "$departmentId", count: { $sum: 1 } } },
+  ]);
+
+  const countMap = {};
+  counts.forEach(c => { countMap[c._id.toString()] = c.count; });
+
+  return departments.map(d => ({
+    ...d,
+    employeeCount: countMap[d._id.toString()] || 0,
+  }));
 };
 
 exports.getDepartmentById = async (id, user) => {

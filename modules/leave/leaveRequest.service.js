@@ -267,7 +267,7 @@ exports.applyLeave = async (payload, user) => {
   const isLOP = leaveType.code === "LOP" || leaveType.isPaid === false;
   let balanceInfo = null; // Track balance for snapshot
 
-  if (!isLOP) {
+   {
     // Use dynamic balance calculation from active policy
     const { getActiveLeavePolicy, calculateLeaveUsage } = require("./leave.service");
     const year = today.getFullYear();

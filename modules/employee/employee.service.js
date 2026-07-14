@@ -527,11 +527,17 @@ exports.changeStatus = async (id, payload, user) => {
     throw new AppError("Invalid status", 400);
   }
 
-  const filter = { _id: id, isDeleted: false, ...buildScopeFilter(user) };
+ const filter = { _id: id, isDeleted: false, ...buildScopeFilter(user) };
   const employee = await Employee.findOne(filter);
   if (!employee) throw new AppError("Employee not found", 404);
 
-  if (employee.status === status) throw new AppError(`Employee is already ${status}`, 400);
+  // Self-lockout prevention — you can never change your own employment status,
+  // even to something like ON_LEAVE. Same principle as user.service.js's deleteUser.
+  if (employee.userId && String(employee.userId) === String(user.userId)) {
+    throw new AppError("You cannot change your own employment status", 400);
+  }
+
+  if (employee.status === status) throw new AppError(`Employee is already ${status}`, 400)
 
   employee.status    = status;
   employee.updatedBy = user.userId;

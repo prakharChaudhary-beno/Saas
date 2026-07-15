@@ -22,18 +22,35 @@ const CompanyModule = require("../modules/company/models/companyModule.model");
 const Module        = require("../modules/module/models/module.model");
 const Delegation = require("../modules/delegation/models/delegation.model");
 
-// Platform-level — always available, skip module check
+// Platform-level — always available, skip module check.
+// IMPORTANT: this list is for account/administration primitives that have
+// no corresponding purchasable Module document at all (see module.Seeders.js
+// for the real, registered slugs: employee, attendance, leave, payroll,
+// shift, holiday, organisation, auth, role, department, designation, crm,
+// sales, bd). Anything NOT in that Module list must stay in this bypass
+// array, otherwise Layer 2's Module.findOne() will always return null and
+// block everyone, on every plan — a "module not found" outage, not proper
+// gating. Do NOT add attendancePolicy/leavePolicy/payrollPolicy here — they
+// are aliased to their real module below instead (see MODULE_ALIAS).
 const PLATFORM_MODULES = [
   "auth", "role", "user", "org", "company",
   "plan", "subscription", "permission", "customer",
   "lob", "unit",
   "holiday", "department", "designation",
-  "leavePolicy", "attendancePolicy", "payrollPolicy",
-  "shift", "roster", "delegation", "notification", "auditLog",
-  "attendance", "leave", "payroll", "employee",
+  "delegation", "notification", "auditLog",
   "investment_declaration", "leave_type",
 ];
 
+// Policy management (attendancePolicy/leavePolicy/payrollPolicy) isn't its
+// own purchasable module — it's config for the real feature module. Gate it
+// against the SAME module the policy configures, so a company without
+// "attendance" in their plan can't manage attendance policies either, and
+// so we never look up a Module document that doesn't exist.
+const MODULE_ALIAS = {
+  attendancePolicy: "attendance",
+  leavePolicy:       "leave",
+  payrollPolicy:     "payroll",
+};
 
 module.exports = (requiredPermission) => {
   return async (req, res, next) => {
@@ -46,6 +63,7 @@ module.exports = (requiredPermission) => {
 
       const { orgId, companyId } = req.user;
       const [moduleName, action] = requiredPermission.split(".");
+      const effectiveModuleName = MODULE_ALIAS[moduleName] || moduleName;
 
       // ═══════════════════════════════════════════════════════════
       // LAYER 1 — Subscription check
@@ -106,14 +124,14 @@ module.exports = (requiredPermission) => {
       // ═══════════════════════════════════════════════════════════
       // LAYER 2 — Module check (FIXED for company-specific modules)
       // ═══════════════════════════════════════════════════════════
-      if (orgId && !PLATFORM_MODULES.includes(moduleName)) {
+      if (orgId && !PLATFORM_MODULES.includes(effectiveModuleName)) {
 
-        const moduleDoc = await Module.findOne({ slug: moduleName, is_active: true });
+        const moduleDoc = await Module.findOne({ slug: effectiveModuleName, is_active: true });
 
         if (!moduleDoc) {
           return res.status(403).json({
             success: false, code: "MODULE_NOT_FOUND",
-            message: `Module "${moduleName}" does not exist on this platform.`,
+            message: `Module "${effectiveModuleName}" does not exist on this platform.`,
           });
         }
 
@@ -132,7 +150,7 @@ module.exports = (requiredPermission) => {
         if (!orgActive && !companyActive) {
           return res.status(403).json({
             success: false, code: "MODULE_NOT_AVAILABLE",
-            message: `The "${moduleName}" module is not available for your account.`,
+            message: `The "${effectiveModuleName}" module is not available for your account.`,
             upgradeUrl: "/pricing",
           });
         }
@@ -141,7 +159,7 @@ module.exports = (requiredPermission) => {
         if (orgActive && companyId && companyModule && !companyModule.is_active) {
           return res.status(403).json({
             success: false, code: "MODULE_DISABLED_FOR_COMPANY",
-            message: `The "${moduleName}" module has been disabled for your company.`,
+            message: `The "${effectiveModuleName}" module has been disabled for your company.`,
           });
         }
       }

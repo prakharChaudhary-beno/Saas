@@ -200,6 +200,65 @@ exports.deletePlan = async (planId) => {
 // Frontend ek baar yeh call kare, cache kare locally
 // ─────────────────────────────────────────────────────────────
 
+// exports.getMyFeatures = async (user) => {
+//   // ── Step 1: Sab active plans ke features ka union lo (fully dynamic) ──
+//   // Koi naya feature kisi plan mein add ho → yahan automatically aayega
+//   // No hardcoded list — DB se resolve hota hai
+//   const allPlans = await Plan.find({
+//     status:     "Active",
+//     is_deleted: false,
+//   }).select("features").lean();
+
+//   const ALL_FEATURE_KEYS = [
+//     ...new Set(allPlans.flatMap((p) => p.features || [])),
+//   ];
+
+//   // ── Step 2: SUPER_ADMIN — sab features milenge ───────────────
+//   if (user.role === "SUPER_ADMIN" || user.roleSlug === "super_admin") {
+//     const featureMap = {};
+//     ALL_FEATURE_KEYS.forEach((k) => { featureMap[k] = true; });
+//     return {
+//       plan:       { name: "Super Admin", package_type: "enterprise" },
+//       features:   ALL_FEATURE_KEYS,
+//       featureMap,
+//     };
+//   }
+
+//   // ── Step 3: Active subscription fetch ────────────────────────
+//   const subscription = await Subscription.findOne({
+//     org_id:    user.orgId,
+//     is_active: true,
+//   })
+//     .select("plan_snapshot.features plan_snapshot.name plan_snapshot.package_type status")
+//     .lean();
+
+//   const features    = subscription?.plan_snapshot?.features    || [];
+//   const planName    = subscription?.plan_snapshot?.name        || "Trial";
+//   const packageType = subscription?.plan_snapshot?.package_type || "professionals";
+
+//   // ── Step 4: featureMap build karo ────────────────────────────
+//   // Sab known keys (from DB) → true if user ke plan mein hai
+//   // Agar Super Admin naya feature add kare kisi plan mein →
+//   // yeh map mein automatically aayega, code change nahi chahiye
+//   const featureMap = {};
+//   ALL_FEATURE_KEYS.forEach((key) => {
+//     featureMap[key] = features.includes(key);
+//   });
+
+//   return {
+//     plan: {
+//       name:         planName,
+//       package_type: packageType,
+//       status:       subscription?.status || "Trial",
+//     },
+//     features,    // array of enabled feature keys for this user
+//     featureMap,  // { shift_roster: true, saml_sso: false, ... }
+//     // allFeatureKeys included so frontend knows complete universe
+//     allFeatureKeys: ALL_FEATURE_KEYS,
+//   };
+// };
+
+
 exports.getMyFeatures = async (user) => {
   // ── Step 1: Sab active plans ke features ka union lo (fully dynamic) ──
   // Koi naya feature kisi plan mein add ho → yahan automatically aayega
@@ -207,20 +266,34 @@ exports.getMyFeatures = async (user) => {
   const allPlans = await Plan.find({
     status:     "Active",
     is_deleted: false,
-  }).select("features").lean();
+  }).select("features moduleSlugs").lean();
 
   const ALL_FEATURE_KEYS = [
     ...new Set(allPlans.flatMap((p) => p.features || [])),
+  ];
+
+  // ── ALL_MODULE_KEYS — same pattern as features, but for base modules ──
+  // (employee/attendance/leave/payroll/shift/etc.) so the frontend can
+  // build its sidebar dynamically instead of hardcoding which nav items
+  // exist per role.
+  const ALL_MODULE_KEYS = [
+    ...new Set(allPlans.flatMap((p) => p.moduleSlugs || [])),
   ];
 
   // ── Step 2: SUPER_ADMIN — sab features milenge ───────────────
   if (user.role === "SUPER_ADMIN" || user.roleSlug === "super_admin") {
     const featureMap = {};
     ALL_FEATURE_KEYS.forEach((k) => { featureMap[k] = true; });
+
+    const moduleMap = {};
+    ALL_MODULE_KEYS.forEach((k) => { moduleMap[k] = true; });
+
     return {
       plan:       { name: "Super Admin", package_type: "enterprise" },
       features:   ALL_FEATURE_KEYS,
       featureMap,
+      modules:    ALL_MODULE_KEYS,
+      moduleMap,
     };
   }
 
@@ -229,20 +302,26 @@ exports.getMyFeatures = async (user) => {
     org_id:    user.orgId,
     is_active: true,
   })
-    .select("plan_snapshot.features plan_snapshot.name plan_snapshot.package_type status")
+    .select("plan_snapshot.features plan_snapshot.modules plan_snapshot.name plan_snapshot.package_type status")
     .lean();
 
   const features    = subscription?.plan_snapshot?.features    || [];
+  const modules      = subscription?.plan_snapshot?.modules     || [];
   const planName    = subscription?.plan_snapshot?.name        || "Trial";
   const packageType = subscription?.plan_snapshot?.package_type || "professionals";
 
-  // ── Step 4: featureMap build karo ────────────────────────────
+  // ── Step 4: featureMap / moduleMap build karo ─────────────────
   // Sab known keys (from DB) → true if user ke plan mein hai
-  // Agar Super Admin naya feature add kare kisi plan mein →
-  // yeh map mein automatically aayega, code change nahi chahiye
+  // Agar Super Admin naya feature/module add kare kisi plan mein →
+  // yeh maps mein automatically aayega, code change nahi chahiye
   const featureMap = {};
   ALL_FEATURE_KEYS.forEach((key) => {
     featureMap[key] = features.includes(key);
+  });
+
+  const moduleMap = {};
+  ALL_MODULE_KEYS.forEach((key) => {
+    moduleMap[key] = modules.includes(key);
   });
 
   return {
@@ -253,7 +332,10 @@ exports.getMyFeatures = async (user) => {
     },
     features,    // array of enabled feature keys for this user
     featureMap,  // { shift_roster: true, saml_sso: false, ... }
-    // allFeatureKeys included so frontend knows complete universe
+    modules,     // array of enabled BASE modules — ["employee","attendance",...]
+    moduleMap,   // { attendance: true, payroll: false, ... } — for building sidebar/nav dynamically
+    // allFeatureKeys/allModuleKeys included so frontend knows complete universe
     allFeatureKeys: ALL_FEATURE_KEYS,
+    allModuleKeys:  ALL_MODULE_KEYS,
   };
 };

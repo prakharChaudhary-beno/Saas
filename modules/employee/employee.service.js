@@ -453,18 +453,19 @@ exports.activateLogin = async (id, payload, user) => {
 
   // Check existing user
   const existingUser = await User.findOne({
-  email:      employee.email,
-  org_id:     employee.org_id,
-  isDeleted:  false
-});
-
-
-
+    email:  employee.email,
+    org_id: employee.org_id,
+  });
 
   if (existingUser) {
+    if (existingUser.isDeleted) {
+      existingUser.isDeleted = false;
+    }
     if (existingUser.status !== "ACTIVE") {
       existingUser.status    = "ACTIVE";
       existingUser.updatedBy = user.userId;
+      await existingUser.save();
+    } else if (existingUser.isModified()) {
       await existingUser.save();
     }
     if (!employee.userId) {

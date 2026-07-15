@@ -72,6 +72,25 @@ exports.inviteUser = async (data, currentUser) => {
       throw new AppError("Role not found or not accessible", 404);
     }
 
+     if (["company_admin", "unit_admin"].includes(role.slug)) {
+      const scopeFilter = {
+        roleId:     roleId,
+        org_id:     currentUser.orgId,
+        status:     "ACTIVE",
+        is_deleted: false,
+      };
+      if (role.slug === "company_admin") scopeFilter.company_id = company_id;
+      if (role.slug === "unit_admin")    scopeFilter.unit_id    = unit_id;
+
+      const previousAdmins = await User.find(scopeFilter).session(session);
+
+      for (const prevAdmin of previousAdmins) {
+        prevAdmin.status    = "INACTIVE";
+        prevAdmin.updatedBy = currentUser.userId;
+        await prevAdmin.save({ session });
+      }
+    }
+
     const hierarchy = { org: 3, company: 2, unit: 1 };
     const currentLevel = hierarchy[currentUser.level] || 0;
     const targetLevel = hierarchy[role.level] || 0;
@@ -416,6 +435,29 @@ exports.updateUser = async (id, data, currentUser) => {
   const roleChanged = data.roleId &&
     data.roleId.toString() !== user.roleId?.toString();
   const fromRoleId  = user.roleId || null;
+
+    if (roleChanged) {
+    const newRole = await Role.findById(data.roleId).select("slug").lean();
+
+    if (newRole && ["company_admin", "unit_admin"].includes(newRole.slug)) {
+      const scopeFilter = {
+        roleId:     data.roleId,
+        org_id:     currentUser.orgId,
+        status:     "ACTIVE",
+        is_deleted: false,
+        _id:        { $ne: user._id },   // don't touch the user being updated
+      };
+      if (newRole.slug === "company_admin") scopeFilter.company_id = user.company_id;
+      if (newRole.slug === "unit_admin")    scopeFilter.unit_id    = user.unit_id;
+
+      const previousAdmins = await User.find(scopeFilter);
+      for (const prevAdmin of previousAdmins) {
+        prevAdmin.status    = "INACTIVE";
+        prevAdmin.updatedBy = currentUser.userId;
+        await prevAdmin.save();
+      }
+    }
+  }
 
   // Update user fields
   if (data.name)     user.name     = data.name;

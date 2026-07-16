@@ -36,7 +36,7 @@ exports.runAutoAbsentMarker = async () => {
       if (existing) { skipped++; continue; }
 
       // Check approved leave
-      const LeaveRequest = require("../modules/leave/models/leaveRequest.model");
+      const LeaveRequest = require("../modules/leave/models/leaveRequest.models");
       const onLeave = await LeaveRequest.findOne({
         employeeId: emp._id,
         startDate: { $lte: targetDate },

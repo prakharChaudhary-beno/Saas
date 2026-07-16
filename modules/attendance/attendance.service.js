@@ -570,9 +570,10 @@ exports.getMyAttendance = async (query, user) => {
 
   return {
     employee: {
-      id:         employee._id,
-      name:       employee.name,
-      employeeId: employee.employeeId,
+      id:           employee._id,
+      name:         employee.name,
+      employeeId:   employee.employeeId,
+      profilePhoto: employee.profilePhoto || null,
     },
     month,
     year,
@@ -601,9 +602,10 @@ exports.getTodayStatus = async (user) => {
   return {
     date:      today,
     employee: {
-      id:         employee._id,
-      name:       employee.name,
-      employeeId: employee.employeeId,
+      id:           employee._id,
+      name:         employee.name,
+      employeeId:   employee.employeeId,
+      profilePhoto: employee.profilePhoto || null,
     },
     attendance: record || null,
     // Convenient flags for frontend
@@ -659,9 +661,10 @@ exports.getMySummary = async (query, user) => {
 
   return {
     employee: {
-      id:         employee._id,
-      name:       employee.name,
-      employeeId: employee.employeeId,
+      id:           employee._id,
+      name:         employee.name,
+      employeeId:   employee.employeeId,
+      profilePhoto: employee.profilePhoto || null,
     },
     month,
     daysInMonth,
@@ -729,7 +732,7 @@ exports.getAllAttendance = async (query, user) => {
 
   const [records, total] = await Promise.all([
     Attendance.find(filter)
-      .populate("employeeId", "name employeeId departmentId")
+      .populate("employeeId", "name employeeId departmentId profilePhoto")
       .sort({ date: -1, createdAt: -1 })
       .skip(skip)
       .limit(Number(limit))
@@ -821,7 +824,7 @@ exports.getTeamAttendance = async (query, user) => {
 
   const [records, total] = await Promise.all([
     Attendance.find(filter)
-      .populate("employeeId", "name employeeId departmentId")
+      .populate("employeeId", "name employeeId departmentId profilePhoto")
       .sort({ date: -1, createdAt: -1 })
       .skip(skip)
       .limit(Number(limit))
@@ -854,7 +857,7 @@ exports.getTeamAttendance = async (query, user) => {
           company_id: user.companyId,
           status: "ACTIVE",
           isDeleted: false,
-        }).select("_id name employeeId departmentId");
+        }).select("_id name employeeId departmentId profilePhoto");
         
         // Find which employees already have attendance records
         const employeesWithRecords = new Set(records.map(r => r.employeeId?._id?.toString() || r.employeeId?.toString()));

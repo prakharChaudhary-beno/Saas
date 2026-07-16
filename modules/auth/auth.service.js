@@ -137,7 +137,7 @@ exports.login = async (payload) => {
     );
 
     // ── Find Employee record for this user ─────────────────────
-    const employee = await Employee.findOne({ userId: user._id }).select("_id").lean();
+    const employee = await Employee.findOne({ userId: user._id }).select("_id profilePhoto").lean();
 
     return {
       token,
@@ -148,6 +148,7 @@ exports.login = async (payload) => {
         name:            user.name,
         email:           user.email,
         phone:           user.phone,
+        profilePhoto:    employee?.profilePhoto || null,  // Employee DP
         org_id:          user.org_id     || null,
         company_id:      user.company_id || null,
         unit_id:         user.unit_id    || null,
@@ -268,12 +269,16 @@ exports.getMe = async (user) => {
   // ── Filter permissions by plan modules ────────────────────
   const filteredPerms = filterPermissions(currentUser.roleId.permissions, subscription);
 
+  // ── Find Employee record for this user ─────────────────────
+  const employee = await Employee.findOne({ userId: currentUser._id }).select("_id profilePhoto").lean();
+
   return {
     user: {
       id:              currentUser._id,
       name:            currentUser.name,
       email:           currentUser.email,
       phone:           currentUser.phone,
+      profilePhoto:    employee?.profilePhoto || null,  // Employee DP
       org_id:          currentUser.org_id     || null,
       company_id:      currentUser.company_id || null,
       unit_id:         currentUser.unit_id    || null,

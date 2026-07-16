@@ -120,11 +120,21 @@ exports.inviteUser = async (data, currentUser) => {
       is_active: true,
     }).select("plan_snapshot.seat_limit").session(session).lean();
 
-    const seatLimit = subscription?.plan_snapshot?.seat_limit;
+       const seatLimit = subscription?.plan_snapshot?.seat_limit;
     if (seatLimit !== null && seatLimit !== undefined) {
-      const currentUserCount = await User.countDocuments({
+      // INACTIVE users still hold their seat (reserved) — only users whose
+      // linked Employee record is TERMINATED free up the seat. Matches
+      // createEmployee's rule so both counts stay consistent.
+      const terminatedUserIds = await Employee.find({
         org_id: currentUser.orgId,
+        status: "TERMINATED",
+        userId: { $ne: null },
+      }).distinct("userId").session(session);
+
+      const currentUserCount = await User.countDocuments({
+        org_id:     currentUser.orgId,
         is_deleted: false,
+        _id:        { $nin: terminatedUserIds },
       }).session(session);
 
       if (currentUserCount >= seatLimit) {

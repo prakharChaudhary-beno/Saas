@@ -131,12 +131,14 @@ exports.createEmployee = async (payload, user) => {
     is_active: true,
   }).select("plan_snapshot.seat_limit").lean();
 
-  const seatLimit = subscription?.plan_snapshot?.seat_limit;
+const seatLimit = subscription?.plan_snapshot?.seat_limit;
   if (seatLimit !== null && seatLimit !== undefined) {
+    // Seat limit applies at the ORG level (shared across all companies
+    // under this org), matching inviteUser's scope — not per-company.
     const currentCount = await Employee.countDocuments({
-      company_id: user.companyId,
-      isDeleted:  false,
-      status:     { $nin: ["TERMINATED"] },
+      org_id:    user.orgId,
+      isDeleted: false,
+      status:    { $nin: ["TERMINATED"] },
     });
     if (currentCount >= seatLimit) {
       throw new AppError(
@@ -379,6 +381,14 @@ exports.updateEmployee = async (id, data, user) => {
   Object.assign(employee, data);
   employee.updatedBy = user.userId;
   await employee.save();
+
+  if (data.status && employee.userId) {
+    // User.status only allows ACTIVE/INACTIVE/BLOCKED (no TERMINATED in its
+    // enum) — map Employee's employment-status vocabulary to User's
+    // account-status vocabulary instead of writing an invalid value.
+    const userStatus = data.status === "TERMINATED" ? "INACTIVE" : data.status;
+    await User.findByIdAndUpdate(employee.userId, { status: userStatus });
+  }
 
   // Audit log — detect what changed
   const newObj = { salary: employee.salary?.toObject?.() || employee.salary };

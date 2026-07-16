@@ -521,7 +521,7 @@ exports.getAllLeaveRequests = async (query, user) => {
   const total = await LeaveRequest.countDocuments(filter);
 
   const requests = await LeaveRequest.find(filter)
-    .populate("employeeId",   "name employeeId email")
+    .populate("employeeId", "name employeeId email profilePhoto")
     .populate("leaveTypeId",  "name code colorCode")
     .populate("l1ApproverId", "name email")
     .populate("l2ApproverId", "name email")
@@ -550,7 +550,7 @@ exports.getLeaveRequestById = async (id, user) => {
     org_id:     user.orgId,
     company_id: user.companyId,
   })
-    .populate("employeeId",   "name employeeId email")
+    .populate("employeeId", "name employeeId email profilePhoto")
     .populate("leaveTypeId",  "name code colorCode")
     .populate("l1ApproverId", "name email")
     .populate("l2ApproverId", "name email");
@@ -575,7 +575,7 @@ exports.updateLeaveStatus = async (id, payload, user) => {
   if (user.companyId) filter.company_id = user.companyId;
 
   const request = await LeaveRequest.findOne(filter)
-    .populate("employeeId", "name email");
+    .populate("employeeId", "name email profilePhoto");
 
   if (!request) throw new AppError("Leave request not found", 404);
 
@@ -1129,7 +1129,7 @@ exports.getPendingApprovals = async (query, user) => {
   const total = await LeaveRequest.countDocuments(filter);
 
   const requests = await LeaveRequest.find(filter)
-    .populate("employeeId",   "name employeeId email")
+    .populate("employeeId", "name employeeId email profilePhoto")
     .populate("leaveTypeId",  "name code colorCode")
     .populate("l1ApproverId", "name email")
     .populate("l2ApproverId", "name email")

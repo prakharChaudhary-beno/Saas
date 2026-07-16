@@ -169,7 +169,7 @@ const seatLimit = subscription?.plan_snapshot?.seat_limit;
   return await Employee.findById(employee._id)
     .populate("departmentId",       "name")
     .populate("designationId",      "name")
-    .populate("reportingManagerId", "name employeeId")
+    .populate("reportingManagerId", "name employeeId profilePhoto")
     .populate("unit_id",            "name")
     .populate("company_id",         "company_name");
 };
@@ -206,13 +206,33 @@ exports.getEmployees = async (user, query) => {
 
   const skip = (Number(page) - 1) * Number(limit);
 
+  // ─── Salary Visibility Rules ─────────────────────────────────
+  // Only HR and Admin roles can see salary in list view
+  // Employee can view their own salary via GET by ID
+  // Manager cannot see subordinates' salary
+  const CAN_VIEW_SALARY_ROLES = ['SUPER_ADMIN', 'org_admin', 'company_admin', 'unit_admin', 'hr_manager', 'company_hr_manager'];  
+  // DEBUG: Log to see what user.role is
+  console.log('=== SALARY VISIBILITY DEBUG ===');
+  console.log('user.role:', user.role);
+  console.log('user.roleId:', user.roleId);
+  console.log('user.level:', user.level);
+  console.log('CAN_VIEW_SALARY_ROLES:', CAN_VIEW_SALARY_ROLES);
+  console.log('includeSalary:', CAN_VIEW_SALARY_ROLES.includes(user.role));
+    const includeSalary = CAN_VIEW_SALARY_ROLES.includes(user.role);
+
+  // Build select fields based on role - always include profilePhoto
+  let selectFields = "-__v -isDeleted";
+  if (!includeSalary) {
+    selectFields += " -salary -bankDetails";
+  }
+
   const [employees, total] = await Promise.all([
     Employee.find(filter)
       .populate("departmentId",       "name")
       .populate("designationId",      "name")
-      .populate("reportingManagerId", "name employeeId")
+      .populate("reportingManagerId", "name employeeId profilePhoto")
       .populate("unit_id",            "name")
-      .select("-__v -isDeleted -salary -bankDetails")
+      .select(selectFields)  // profilePhoto is included by default
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit)),
@@ -239,15 +259,36 @@ exports.getEmployeeById = async (id, user) => {
   const employee = await Employee.findOne(filter)
     .populate("departmentId",       "name")
     .populate("designationId",      "name")
-    .populate("reportingManagerId", "name employeeId")
+    .populate("reportingManagerId", "name employeeId profilePhoto")
     .populate("unit_id",            "name")
     .populate("company_id",         "company_name")
     .populate("createdBy",          "name email")
     .populate("updatedBy",          "name email")
     .populate("userId",             "email status roleId")
-    .select("-__v -isDeleted");
+    .select("-__v -isDeleted");  // profilePhoto is included by default
 
   if (!employee) throw new AppError("Employee not found", 404);
+
+  // ─── Salary Visibility for GET BY ID ─────────────────────────────────
+  // Admin/HR: Full access if within scope (same unit/company)
+  // Employee: Can view OWN salary (read-only)
+  // Manager: Cannot view subordinates' salary
+  const CAN_VIEW_ALL_SALARIES_ROLES = ['SUPER_ADMIN', 'org_admin', 'company_admin', 'unit_admin', 'hr_manager', 'company_hr_manager'];
+  const canViewAllSalaries = CAN_VIEW_ALL_SALARIES_ROLES.includes(user.role);
+  const isOwnRecord = employee.userId && String(employee.userId) === String(user.userId);
+
+  // If not admin AND not own record, hide salary
+  if (!canViewAllSalaries && !isOwnRecord) {
+    employee.salary = undefined;
+    employee.bankDetails = undefined;
+  }
+
+  // Add permission flags for frontend to know edit access
+  const CAN_EDIT_SALARY_ROLES = ['SUPER_ADMIN', 'org_admin', 'company_admin', 'unit_admin', 'hr_manager', 'company_hr_manager'];
+  employee._doc = employee._doc || {};
+  employee._doc.canEditSalary = CAN_EDIT_SALARY_ROLES.includes(user.role);
+  employee._doc.isOwnRecord = isOwnRecord;
+
   return employee;
 };
 
@@ -283,6 +324,18 @@ exports.updateEmployee = async (id, data, user) => {
     "salary", "bankDetails",
     "documents"
   ];
+
+  // ─── Salary Update Permission Check ─────────────────────────────────
+  // Only Admin/HR can update salary/bankDetails
+  const CAN_EDIT_SALARY = ['SUPER_ADMIN', 'org_admin', 'company_admin', 'unit_admin', 'hr_manager', 'company_hr_manager'];
+  const salaryFieldsPresent = data.salary || data.bankDetails;
+  
+  if (salaryFieldsPresent && !CAN_EDIT_SALARY.includes(user.role)) {
+    delete data.salary;
+    delete data.bankDetails;
+    // Log attempt but don't throw - just ignore
+    console.log(`User ${user.userId} (${user.role}) attempted to update salary - permission denied`);
+  }
 
   if (user.role === "employee") {
     const emp = await Employee.findOne({
@@ -410,10 +463,10 @@ exports.updateEmployee = async (id, data, user) => {
   return await Employee.findById(employee._id)
     .populate("departmentId",       "name")
     .populate("designationId",      "name")
-    .populate("reportingManagerId", "name employeeId")
+    .populate("reportingManagerId", "name employeeId profilePhoto")
     .populate("unit_id",            "name")
     .populate("updatedBy",          "name email")
-    .select("-__v -isDeleted");
+    .select("-__v -isDeleted");  // profilePhoto is included by default
 };
 
 // ─── DELETE ───────────────────────────────────────────────────
@@ -631,9 +684,9 @@ exports.getMyProfile = async (user) => {
   })
     .populate("departmentId",       "name")
     .populate("designationId",      "name")
-    .populate("reportingManagerId", "name employeeId")
+    .populate("reportingManagerId", "name employeeId profilePhoto")
     .populate("unit_id",            "name")
-    .select("-__v -isDeleted -salary -bankDetails") // salary + bank HR only
+    .select("-__v -isDeleted -salary -bankDetails") // salary + bank HR only, profilePhoto included
     .lean();
 
   if (!employee) throw new AppError("Employee profile not found", 404);

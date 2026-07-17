@@ -27,7 +27,7 @@ router.post(
 );
 
 // ── GET /users ────────────────────────────────────────────────
-// Requires: employee.read permission
+// Requires: user.read permission
 // Filters: ?page=1&limit=10&search=&status=&roleId=&departmentId=
 router.get(
   "/",

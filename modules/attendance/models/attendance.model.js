@@ -218,6 +218,12 @@ const attendanceSchema = new Schema(
       default: "18:00",
     },
 
+    // Night shift: shiftEnd is on next calendar day
+    isNextDay: {
+      type: Boolean,
+      default: false,
+    },
+
     // Grace period in minutes before marking LATE
     graceMinutes: {
       type: Number,

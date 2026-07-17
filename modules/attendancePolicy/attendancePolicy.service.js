@@ -73,6 +73,27 @@ exports.createPolicy = async (body, user) => {
     );
   }
 
+  // ── Guard 3: Validate shift_id reference if provided ───
+  if (body.shift_id) {
+    const Shift = require('../shift/models/shift.model')
+    const shift = await Shift.findById(body.shift_id)
+    if (!shift) {
+      throw new AppError('Referenced shift not found', 404)
+    }
+    if (shift.unit_id.toString() !== (user.unitId || body.unit_id || shift.unit_id).toString()) {
+      throw new AppError('Shift must belong to the same unit', 400)
+    }
+    // Auto-populate embedded shift from shift reference
+    body.shift = {
+      name: shift.name,
+      start: shift.startTime,
+      end: shift.endTime,
+      graceMinutes: shift.gracePeriodMinutes,
+      minimumHours: Math.floor(shift.workingMinutes / 60),
+      halfDayMinHours: Math.floor(shift.halfDayThresholdMinutes / 60)
+    }
+  }
+
   const policy = await AttendancePolicy.create({
     ...body,
     org_id:     user.orgId,

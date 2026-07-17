@@ -37,6 +37,32 @@ const shiftSchema = new mongoose.Schema(
       default: 4,
       min: 0.5,                              // minimum hours to count as half day
     },
+    
+    // ─── Shift Window Controls (Enterprise HRMS) ─────────────────
+    // Control when punch-in is allowed
+    strictPunchWindow: {
+      type: Boolean,
+      default: true,                         // If true, enforce shift start/end limits
+    },
+    // Allow punch-in after shift end (with time limit)
+    allowLatePunchIn: {
+      type: Boolean,
+      default: false,                        // If true, allow late punch-in up to maxLateMinutes
+    },
+    // Maximum minutes after shift end for punch-in (only if allowLatePunchIn=true)
+    maxLateMinutes: {
+      type: Number,
+      default: 120,                          // 2 hours after shift start by default
+      min: 15,
+      max: 480,                              // max 8 hours
+    },
+    // Allow punch-in before shift start (minutes before)
+    allowEarlyMinutes: {
+      type: Number,
+      default: 30,                           // Allow punch 30 min early
+      min: 0,
+      max: 120,
+    },
   },
   { _id: false }
 );
@@ -219,6 +245,16 @@ const attendancePolicySchema = new mongoose.Schema(
     overtime: {
       type: overtimeSchema,
       default: () => ({}),
+    },
+
+    // ── Shift Reference ─────────────────────────────────────────────────────
+    // Optional: Reference to actual Shift model. If set, use shift timings.
+    // Fallback: Use embedded shift schema timings.
+    shift_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Shift",
+      default: null,
+      index: true,
     },
 
     // ── Scope — same structure as LeavePolicy.applicableFor ───────────────────

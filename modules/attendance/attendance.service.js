@@ -63,6 +63,84 @@ const calcLateStatus = (checkInDate, shiftStart, graceMinutes) => {
 };
 
 /**
+ * ─── SHIFT WINDOW VALIDATION ─────────────────────────────────────
+ * Checks if punch-in is within allowed shift window.
+ * 
+ * Enterprise Rule: Employees can only punch-in during their shift hours.
+ * - For day shifts (09:00-18:00): Punch-in allowed from shiftStart up to shiftEnd
+ * - For night shifts (21:00-06:00): Punch-in allowed across midnight boundary
+ * 
+ * Policy Override: AttendancePolicy.shift.allowLatePunchIn can relax this
+ * 
+ * @param {Date} punchTime - Current time
+ * @param {string} shiftStart - "HH:MM" format
+ * @param {string} shiftEnd - "HH:MM" format  
+ * @param {boolean} isNextDay - true for night shifts crossing midnight
+ * @param {number} graceMinutes - grace period after shift start
+ * @param {object} policy - AttendancePolicy with allowLatePunchIn, maxLateMinutes settings
+ * @returns {isValid: boolean, reason: string, isTooEarly: boolean, isTooLate: boolean}
+ */
+const validateShiftWindow = (punchTime, shiftStart, shiftEnd, isNextDay, graceMinutes, policy = {}) => {
+  const { hours: startH, minutes: startM } = parseTime(shiftStart);
+  const { hours: endH, minutes: endM } = parseTime(shiftEnd);
+  
+  // Create shift start/end times for today
+  const shiftStartTime = new Date(punchTime);
+  shiftStartTime.setUTCHours(startH, startM, 0, 0);
+  
+  const shiftEndTime = new Date(punchTime);
+  if (isNextDay) {
+    // Night shift: endTime is next day
+    shiftEndTime.setUTCDate(shiftEndTime.getUTCDate() + 1);
+  }
+  shiftEndTime.setUTCHours(endH, endM, 0, 0);
+  
+  // Calculate punch-in window boundaries
+  // Window opens: shiftStart - 30 minutes (allow early arrival)
+  // Window closes: shiftEnd (hard stop for day shift) or configurable for night shift
+  const allowEarlyMinutes = policy?.allowEarlyMinutes ?? 30; // default 30 min before
+  const windowOpenTime = new Date(shiftStartTime);
+  windowOpenTime.setUTCMinutes(windowOpenTime.getUTCMinutes() - allowEarlyMinutes);
+  
+  let windowCloseTime = shiftEndTime;
+  
+  // Policy override: allowLatePunchIn with maxLateMinutes
+  if (policy?.allowLatePunchIn && policy?.maxLateMinutes) {
+    const extendedClose = new Date(shiftStartTime);
+    extendedClose.setUTCMinutes(extendedClose.getUTCMinutes() + graceMinutes + policy.maxLateMinutes);
+    windowCloseTime = extendedClose > shiftEndTime ? extendedClose : shiftEndTime;
+  }
+  
+  // Allow configuration from policy for strict window
+  const strictWindow = policy?.strictPunchWindow !== false; // default true
+  
+  const isTooEarly = punchTime < windowOpenTime;
+  const isTooLate = strictWindow && punchTime > windowCloseTime;
+  const isValid = !isTooEarly && !isTooLate;
+  
+  let reason = "";
+  if (isTooEarly) {
+    reason = `Punch-in too early. Shift starts at ${shiftStart}. Please wait until ${shiftStart}`;
+  } else if (isTooLate) {
+    const closeStr = policy?.allowLatePunchIn 
+      ? `${policy.maxLateMinutes} minutes after shift start`
+      : shiftEnd;
+    reason = `Punch-in denied. Shift window closed at ${closeStr}. Your shift has ended.`;
+  }
+  
+  return {
+    isValid,
+    reason,
+    isTooEarly,
+    isTooLate,
+    windowOpen: windowOpenTime,
+    windowClose: windowCloseTime,
+    shiftStart: shiftStartTime,
+    shiftEnd: shiftEndTime
+  };
+};
+
+/**
  * Get employee + validate tenant ownership
  * Throws 404 if not found
  */
@@ -292,6 +370,8 @@ exports.punchIn = async (data, user, req = null) => {
   // shiftSource saved in attendance record for audit trail
 
   let shiftStart      = "09:00";  // last resort default
+  let shiftEnd        = "18:00";  // last resort default
+  let isNextDay       = false;   // night shift flag
   let graceMinutes    = 15;
   let standardHours   = 8;
   let halfDayThreshold = 4;
@@ -313,6 +393,8 @@ exports.punchIn = async (data, user, req = null) => {
     if (shiftResult?.shift) {
       const s         = shiftResult.shift;
       shiftStart      = s.startTime;                               // "HH:MM"
+      shiftEnd        = s.endTime;                                 // "HH:MM"
+      isNextDay       = s.isNextDay ?? false;                      // night shift
       graceMinutes    = s.gracePeriodMinutes    ?? 15;
       standardHours   = (s.workingMinutes ?? 480) / 60;           // minutes → hours
       halfDayThreshold = (s.halfDayThresholdMinutes ?? 240) / 60; // minutes → hours
@@ -335,6 +417,7 @@ exports.punchIn = async (data, user, req = null) => {
   // If no shift found from roster/default → use policy values
   if (shiftSource === "policy_default" && attendancePolicy) {
     shiftStart       = attendancePolicy.shift?.start          ?? "09:00";
+    shiftEnd         = attendancePolicy.shift?.end          ?? "18:00";
     graceMinutes     = attendancePolicy.shift?.graceMinutes   ?? 15;
     standardHours    = attendancePolicy.shift?.minimumHours   ?? 8;
     halfDayThreshold = attendancePolicy.shift?.halfDayMinHours ?? 4;
@@ -349,6 +432,31 @@ exports.punchIn = async (data, user, req = null) => {
   const overtimeThreshold = config?.overtimeThresholdHours ?? standardHours + 1;
   // CompanyConfig halfDay override if explicitly set
   if (config?.halfDayThresholdHours) halfDayThreshold = config.halfDayThresholdHours;
+
+  // ── 6b. SHIFT WINDOW VALIDATION (Enterprise HRMS) ─────────────
+  // Validate punch-in is within allowed shift window
+  // Policy can override: allowLatePunchIn, maxLateMinutes, strictPunchWindow
+  const shiftPolicy = attendancePolicy?.shift || {};
+  
+  const windowValidation = validateShiftWindow(
+    now,
+    shiftStart,
+    shiftEnd,
+    isNextDay,
+    graceMinutes,
+    shiftPolicy
+  );
+  
+  // Only enforce if policy has strictPunchWindow enabled (default true)
+  if (shiftPolicy.strictPunchWindow !== false) {
+    if (!windowValidation.isValid) {
+      throw new AppError(
+        windowValidation.reason ||
+        `Punch-in denied. Your shift is ${shiftStart} - ${shiftEnd}.`,
+        403
+      );
+    }
+  }
 
   const { isLate, lateMinutes } = calcLateStatus(now, shiftStart, graceMinutes);
 
@@ -378,7 +486,9 @@ exports.punchIn = async (data, user, req = null) => {
         date:         today,
         standardHours,
         shiftStart,
+        shiftEnd,
         graceMinutes,
+        isNextDay,
         // Shift resolution metadata — audit trail + punch-out uses same values
         shiftId:          resolvedShiftId  || null,  // Shift doc used
         rosterId:         resolvedRosterId || null,   // Roster doc (null if default/policy)

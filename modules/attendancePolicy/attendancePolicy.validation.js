@@ -65,6 +65,7 @@ const createPolicySchema = Joi.object({
   description:   Joi.string().trim().max(1000).optional().allow(""),
   status:        Joi.string().valid("draft", "active").default("draft"),
   shift:         shiftSchema.required(),
+  shift_id:       Joi.string().pattern(/^[a-fA-F0-9]{24}$/).optional().allow(null),  // Reference to Shift model
   lateMark:      lateMarkSchema.optional(),
   sandwichRule:  sandwichRuleSchema.optional(),
   overtime:      overtimeSchema.optional(),

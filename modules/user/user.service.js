@@ -476,6 +476,12 @@ exports.updateUser = async (id, data, currentUser) => {
   user.updatedBy = currentUser.userId;
   await user.save();
 
+  // ─── Sync Employee.status when User.status changes ────────────────────────
+  if (data.status) {
+    const { syncUserStatusToEmployee } = require('../../utils/statusSync');
+    await syncUserStatusToEmployee(user._id, data.status, currentUser.userId);
+  }
+
   // Department change — Employee model
   let deptChanged = false;
   let fromDeptId  = null;
@@ -581,6 +587,10 @@ exports.deleteUser = async (id, currentUser) => {
   user.status    = "INACTIVE";
   user.updatedBy = currentUser.userId;
   await user.save();
+
+  // ─── Sync Employee.status when User is deleted ───────────────────────────
+  const { syncUserStatusToEmployee } = require('../../utils/statusSync');
+  await syncUserStatusToEmployee(id, 'INACTIVE', currentUser.userId);
 
   return { message: "User deleted successfully" };
 };

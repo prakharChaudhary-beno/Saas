@@ -5,10 +5,11 @@
 const Subscription = require("../modules/subscription/models/subscription.Models");
 const Plan         = require("../modules/plan/models/plan.model");
 
-// Feature aliases: if user has the alias, they also have these features
-// shift_roster is a bundle that includes shift, roster, and shift_roster
+// Feature aliases: expand feature bundles
+// shift_roster bundle provides both shift AND roster features
+// shift/roster individually provides only that specific feature
 const FEATURE_ALIASES = {
-  "shift_roster": ["shift", "roster", "shift_roster"],
+  "shift_roster": ["shift", "roster"],
   "shift": ["shift"],
   "roster": ["roster"],
 };
@@ -17,7 +18,7 @@ module.exports = (featureKey) => {
   return async (req, res, next) => {
     try {
       // SUPER_ADMIN — always bypass
-      if (req.user?.role === "SUPER_ADMIN" || req.user?.roleSlug === "super_admin") {
+      if (req.user?.role === "SUPER_ADMIN" || req.user?.roleSlug === "super_admin" || req.user?.roleSlug === "product_admin") {
         return next();
       }
 
@@ -42,7 +43,7 @@ module.exports = (featureKey) => {
       }
 
       // Expand features with aliases
-      // If user has "shift_roster", they also have "shift" and "roster"
+      // Example: shift_roster → [shift, roster]  (bundle expands to both)
       const expandedFeatures = new Set(features);
       for (const f of features) {
         const aliases = FEATURE_ALIASES[f];
@@ -52,6 +53,7 @@ module.exports = (featureKey) => {
       }
 
       // Check: is featureKey in expanded features?
+      // No need for special cases - expansion handles it
       if (!expandedFeatures.has(featureKey)) {
         return res.status(403).json({
           success:    false,

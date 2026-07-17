@@ -88,9 +88,14 @@ exports.createPolicy = async (body, user) => {
       name: shift.name,
       start: shift.startTime,
       end: shift.endTime,
+      isNextDay: shift.isNextDay || false,
       graceMinutes: shift.gracePeriodMinutes,
       minimumHours: Math.floor(shift.workingMinutes / 60),
-      halfDayMinHours: Math.floor(shift.halfDayThresholdMinutes / 60)
+      halfDayMinHours: Math.floor(shift.halfDayThresholdMinutes / 60),
+      strictPunchWindow: body.shift?.strictPunchWindow ?? true,
+      allowLatePunchIn: body.shift?.allowLatePunchIn ?? false,
+      maxLateMinutes: body.shift?.maxLateMinutes ?? 120,
+      allowEarlyMinutes: body.shift?.allowEarlyMinutes ?? 30
     }
   }
 
@@ -161,6 +166,7 @@ exports.getPolicyById = async (id, user) => {
   })
     .populate("applicableFor.departments",  "name")
     .populate("applicableFor.designations", "name")
+    .populate("shift_id")  // Populate shift reference for edit form
     .populate("createdBy", "name email")
     .populate("updatedBy", "name email");
 
@@ -201,6 +207,41 @@ exports.updatePolicy = async (id, body, user) => {
     if (!incoming || typeof incoming !== "object") return existing;
     return { ...existing.toObject?.() ?? existing, ...incoming };
   };
+
+  // ── If shift_id is provided, auto-populate embedded shift ───
+  if (body.shift_id !== undefined) {
+    if (body.shift_id) {
+      const Shift = require('../shift/models/shift.model')
+      const shift = await Shift.findById(body.shift_id)
+      if (!shift) {
+        throw new AppError('Referenced shift not found', 404)
+      }
+      if (shift.unit_id.toString() !== policy.unit_id.toString()) {
+        throw new AppError('Shift must belong to the same unit', 400)
+      }
+      policy.shift_id = body.shift_id
+      body.shift = {
+        name: shift.name,
+        start: shift.startTime,
+        end: shift.endTime,
+        isNextDay: shift.isNextDay || false,
+        graceMinutes: shift.gracePeriodMinutes,
+        minimumHours: Math.floor(shift.workingMinutes / 60),
+        halfDayMinHours: Math.floor(shift.halfDayThresholdMinutes / 60),
+        strictPunchWindow: body.shift?.strictPunchWindow ?? policy.shift?.strictPunchWindow ?? true,
+        allowLatePunchIn: body.shift?.allowLatePunchIn ?? policy.shift?.allowLatePunchIn ?? false,
+        maxLateMinutes: body.shift?.maxLateMinutes ?? policy.shift?.maxLateMinutes ?? 120,
+        allowEarlyMinutes: body.shift?.allowEarlyMinutes ?? policy.shift?.allowEarlyMinutes ?? 30
+      }
+    } else {
+      policy.shift_id = null
+    }
+  }
+  
+  // Handle embedded shift if provided (auto-populated from shift_id or manual)
+  if (body.shift !== undefined) {
+    policy.shift = mergeNested(policy.shift, body.shift);
+  }
 
   if (body.shift)        policy.shift        = mergeNested(policy.shift, body.shift);
   if (body.lateMark)     policy.lateMark     = mergeNested(policy.lateMark, body.lateMark);

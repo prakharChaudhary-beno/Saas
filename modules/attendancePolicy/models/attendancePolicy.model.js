@@ -20,6 +20,15 @@ const shiftSchema = new mongoose.Schema(
       required: true,
       match: [/^([01]\d|2[0-3]):[0-5]\d$/, "end must be HH:MM format"],
     },
+    
+    // ─── Night Shift Flag ───────────────────────────────
+    // true = shift crosses midnight (end time is next day)
+    // e.g., 21:00 → 05:00 means shift starts at 9 PM, ends at 5 AM next day
+    isNextDay: {
+      type: Boolean,
+      default: false,
+    },
+    
     graceMinutes: {
       type: Number,
       default: 10,

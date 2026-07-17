@@ -14,9 +14,14 @@ const shiftSchema = Joi.object({
   name:            Joi.string().trim().max(100).required(),
   start:           timeHHMM.required(),
   end:             timeHHMM.required(),
+  isNextDay:       Joi.boolean().default(false),  // Night shift flag
   graceMinutes:    Joi.number().integer().min(0).max(60).default(10),
   minimumHours:    Joi.number().min(1).max(24).default(8),
   halfDayMinHours: Joi.number().min(0.5).default(4),
+  strictPunchWindow: Joi.boolean().default(true),
+  allowLatePunchIn: Joi.boolean().default(false),
+  maxLateMinutes: Joi.number().integer().min(15).max(480).default(120),
+  allowEarlyMinutes: Joi.number().integer().min(0).max(120).default(30),
 });
 
 // ─── Late Mark ────────────────────────────────────────────────────────────────
@@ -82,6 +87,7 @@ const updatePolicySchema = Joi.object({
   description:   Joi.string().trim().max(1000).optional().allow(""),
   changeNote:    Joi.string().trim().max(500).optional().allow(null, ""),
   shift:         shiftSchema.optional(),
+  shift_id:      Joi.string().pattern(/^[a-fA-F0-9]{24}$/).optional().allow(null),  // Reference to Shift model
   lateMark:      lateMarkSchema.optional(),
   sandwichRule:  sandwichRuleSchema.optional(),
   overtime:      overtimeSchema.optional(),

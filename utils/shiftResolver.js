@@ -84,7 +84,7 @@ const resolveShiftTimings = async (employeeId, unitId, date) => {
       graceMinutes: policy.shift.graceMinutes || 15,
       minimumHours: policy.shift.minimumHours || 8,
       halfDayMinHours: policy.shift.halfDayMinHours || 4,
-      isNextDay: false,
+      isNextDay: policy.shift.isNextDay || false,
       shiftId: null,
       shiftName: policy.shift.name || 'Default Shift',
       source: 'policy_embedded',

@@ -26,6 +26,7 @@ const MODULE_MAP = {
   delegation:    ["delegation"],
   audit_trail:   ["auditLog", "audit"],
   notifications: ["notification"],
+  biometric:     ["biometric"],
   leavePolicy:        ["leavePolicy"],
   attendancePolicy:   ["attendancePolicy"],
   payrollPolicy:      ["payrollPolicy"],
@@ -39,6 +40,12 @@ const filterPermissions = (permissions, subscription) => {
   const planFeatures = subscription?.plan_snapshot?.features || [];
   const activeModules = [...new Set([...planModules, ...planFeatures])];
   const allowedModules = activeModules.flatMap(s => MODULE_MAP[s] || []);
+  
+  // Always include biometric module (core HRMS feature)
+  if (!allowedModules.includes("biometric")) {
+    allowedModules.push("biometric");
+  }
+  
   return permissions.filter(p => allowedModules.includes(p.module));
 };
 

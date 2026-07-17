@@ -53,7 +53,23 @@ const employeeSchema = new mongoose.Schema({
     required: true
   },
 
-  // ─── Personal Info ────────────────────────────────
+  // ─── Biometric Integration ───────────────────────────────────────────────
+  // Device-scoped numeric code for biometric attendance
+  // Generated lazily when first pushed to a device
+  // Immutable once assigned - treated as system secret
+  biometricCode: {
+    type:     Number,
+    default:  null,
+    index:    true
+  },
+
+  // RFID card number (if applicable)
+  rfidCardNumber: {
+    type:     String,
+    default:  null
+  },
+
+  // ─── Personal Info ────────────────────────────────────────────────────────
   name: {
     type:     String,
     required: true,

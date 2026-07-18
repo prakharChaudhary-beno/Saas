@@ -299,7 +299,31 @@ exports.togglePolicy = async (policyId, user) => {
     throw new AppError("Policy not found", 404);
   }
 
-  policy.enabled = !policy.enabled;
+  const willActivate = !policy.enabled;
+
+  // Scope-conflict check — only when turning ON. Block if another active
+  // policy already covers this exact unit (or company-wide, if this
+  // policy has no unit_id).
+  if (willActivate) {
+    const conflictFilter = {
+      _id:        { $ne: policy._id },
+      org_id:     policy.org_id,
+      company_id: policy.company_id,
+      status:     "active",
+      enabled:    true,
+      isDeleted:  false,
+      unit_id:    policy.unit_id || null,
+    };
+    const conflict = await RegularisationPolicy.findOne(conflictFilter).select("name").lean();
+    if (conflict) {
+      throw new AppError(
+        `Cannot activate — "${conflict.name}" is already active for this ${policy.unit_id ? "unit" : "company"}.`,
+        409
+      );
+    }
+  }
+
+  policy.enabled = willActivate;
   policy.status = policy.enabled ? "active" : "inactive";
   policy.updatedBy = toObjId(user.userId);
   await policy.save();

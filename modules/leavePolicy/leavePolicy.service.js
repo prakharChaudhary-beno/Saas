@@ -203,6 +203,25 @@ exports.activatePolicy = async (id, user) => {
   if (policy.status === "archived") throw new AppError("Cannot activate an archived policy", 400);
   if (!policy.leaveTypes?.length)   throw new AppError("Cannot activate policy with no leave types", 400);
 
+  // Scope-conflict check — block activation if another already-active policy
+  // covers any of the same departments (same reasoning as AttendancePolicy).
+  const departments = policy.applicableFor?.departments || [];
+  if (departments.length > 0) {
+    const conflict = await LeavePolicy.findOne({
+      _id:        { $ne: policy._id },
+      company_id: policy.company_id,
+      status:     "active",
+      isDeleted:  false,
+      "applicableFor.departments": { $in: departments },
+    }).select("name").lean();
+
+    if (conflict) {
+      throw new AppError( 
+        `Cannot activate — "${conflict.name}" is already active for one or more of the same departments. Deactivate it first, or remove the overlapping department(s) from this policy.`,
+        409
+      );
+    }
+  }
   await policyVersionService.saveVersionSnapshot({
     policyType: POLICY_TYPE,
     policyDocBeforeChange: policy,

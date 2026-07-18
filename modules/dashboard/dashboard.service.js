@@ -501,7 +501,8 @@ exports.getUnitDashboard = async (user, query = {}) => {
 exports.getEmployeeDashboard = async (user, query = {}) => {
   const { orgId, companyId, unitId, userId } = user;
   const month = query.month || currentMonthStr();
-  const year  = currentYear();
+  const [yr, mon] = month.split("-").map(Number);
+  const year = yr; // Use year from month parameter, not current year
   const { start: monthStart, end: monthEnd } = monthRange(month);
   const { start: todayStart, end: todayEnd } = todayRange();
 
@@ -518,10 +519,63 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
   if (!employee) throw new AppError("Employee record not found", 404);
 
   const empId = employee._id;
-  const [yr, mon] = month.split("-").map(Number);
   const daysInMonth = new Date(yr, mon, 0).getDate();
 
-  const [todayRecord, monthAtt, leaveBalances, recentLeaves, upcomingHols] = await Promise.all([
+  // Ensure leave balances exist for all leave types
+  const LeaveType = require("../leave/models/leaveType.models");
+  const leaveTypes = await LeaveType.find({
+    org_id: orgId,
+    company_id: companyId,
+    isActive: true,
+    isDeleted: false,
+  }).select("_id name code color defaultDaysPerYear").lean();
+
+  // Get existing balances
+  let leaveBalances = await LeaveBalance.find({
+    org_id: orgId,
+    company_id: companyId,
+    employeeId: empId,
+    year,
+  })
+    .populate("leaveTypeId", "name code color defaultDaysPerYear")
+    .lean();
+
+  // Initialize missing balances
+  const existingLeaveTypeIds = new Set(leaveBalances.map(lb => lb.leaveTypeId?._id?.toString() || lb.leaveTypeId?.toString()));
+  const missingLeaveTypes = leaveTypes.filter(lt => !existingLeaveTypeIds.has(lt._id.toString()));
+
+  if (missingLeaveTypes.length > 0) {
+    const newBalances = await Promise.all(
+      missingLeaveTypes.map(lt =>
+        LeaveBalance.create({
+          org_id: orgId,
+          company_id: companyId,
+          unit_id: unitId || null,
+          employeeId: empId,
+          leaveTypeId: lt._id,
+          year,
+          totalAllocated: lt.defaultDaysPerYear || 0,
+          used: 0,
+          pending: 0,
+          remaining: lt.defaultDaysPerYear || 0,
+          adjustmentHistory: [{
+            days: lt.defaultDaysPerYear || 0,
+            reason: "Auto-initialized on dashboard fetch",
+            adjustedBy: empId,
+            type: "YEAR_INITIALIZATION",
+          }],
+        })
+      )
+    );
+
+    // Merge new balances with existing
+    leaveBalances = [...leaveBalances, ...newBalances.map(nb => ({
+      ...nb.toObject(),
+      leaveTypeId: missingLeaveTypes.find(lt => lt._id.toString() === nb.leaveTypeId.toString()),
+    }))];
+  }
+
+  const [todayRecord, monthAtt, recentLeaves, upcomingHols] = await Promise.all([
 
     Attendance.findOne({
       org_id:     orgId,
@@ -551,15 +605,6 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
         totalLateMinutes:   { $sum: { $ifNull: ["$lateMinutes", 0] } },
       }},
     ]),
-
-    LeaveBalance.find({
-      org_id:     orgId,
-      company_id: companyId,
-      employeeId: empId,
-      year,
-    })
-      .populate("leaveTypeId", "name code color defaultDaysPerYear")
-      .lean(),
 
     LeaveRequest.find({
       org_id:     orgId,

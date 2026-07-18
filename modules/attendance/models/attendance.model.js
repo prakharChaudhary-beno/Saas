@@ -165,7 +165,15 @@ const attendanceSchema = new Schema(
       message:    { type: String, default: null },
     },
 
-    // ─── Leave Reference (if ON_LEAVE) ────────────────────────────
+    // ─── Punch Source (top-level for biometric integration) ────────
+    punchSource: {
+      type:    String,
+      enum:    ['WEB', 'MOBILE', 'BIOMETRIC', 'BIOMETRIC_CLOSED', 'MANUAL', 'REGULARIZED', 'UNKNOWN'],
+      default: 'UNKNOWN',
+      index:   true
+    },
+
+    // ─── Leave Reference (if ON_LEAVE) ────────────────────────────────
     leaveRequestId: {
       type: Schema.Types.ObjectId,
       ref: "LeaveRequest",
@@ -230,6 +238,67 @@ const attendanceSchema = new Schema(
       default: 15,
     },
 
+    // ─── Shift Resolution Metadata ─────────────────────────────────
+    shiftId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Shift',
+      default: null
+    },
+
+    rosterId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Roster',
+      default: null
+    },
+
+    shiftSource: {
+      type: String,
+      enum: ['roster', 'default_shift', 'policy', 'policy_default'],
+      default: 'policy_default'
+    },
+
+    halfDayThreshold: {
+      type: Number,
+      default: 4
+    },
+
+    overtimeThreshold: {
+      type: Number,
+      default: 0
+    },
+
+    // ─── Shift Finalization ────────────────────────────────────────
+    finalized: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+
+    finalizedAt: {
+      type: Date,
+      default: null
+    },
+
+    finalizedBy: {
+      type: String,
+      default: null // 'SYSTEM_CRON' | 'SYSTEM_AUTO_PUNCHOUT' | 'MANUAL' | userId
+    },
+
+    needsReview: {
+      type: Boolean,
+      default: false
+    },
+
+    reviewReason: {
+      type: String,
+      default: null
+    },
+
+    flaggedAt: {
+      type: Date,
+      default: null
+    },
+
     // ─── Soft Delete ─────────────────────────────────────────────
     isDeleted: {
       type: Boolean,
@@ -291,7 +360,8 @@ attendanceSchema.virtual("isPunchedIn").get(function () {
 // ─── Pre-save Hook: Calculate workingHours, overtimeHours ─────────────────────
 
 attendanceSchema.pre("save", function (next) {
-  // workingHours calculate karo jab dono timestamps hain
+  // workingHours already calculated in service layer (timezone-aware)
+  // This hook only validates the data
   if (this.checkIn && this.checkOut) {
     const diffMs = this.checkOut - this.checkIn;
 
@@ -299,21 +369,27 @@ attendanceSchema.pre("save", function (next) {
       return next(new Error("Check-out time cannot be before check-in time"));
     }
 
-    this.workingHours = parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2));
+    // If workingHours not set, calculate (fallback)
+    if (!this.workingHours) {
+      this.workingHours = parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2));
+    }
 
-    // Overtime (only positive)
-    const extra = this.workingHours - this.standardHours;
-    this.overtimeHours = extra > 0 ? parseFloat(extra.toFixed(2)) : 0;
+    // Overtime (only positive) - fallback if not calculated
+    if (!this.overtimeHours || this.overtimeHours === 0) {
+      const extra = this.workingHours - this.standardHours;
+      this.overtimeHours = extra > 0 ? parseFloat(extra.toFixed(2)) : 0;
+    }
   }
 
-  // Date ko midnight UTC pe normalize karo (only date part matters)
+  // Date ko midnight pe normalize karo (service layer should use org timezone midnight)
+  // This is UTC midnight - service layer handles timezone conversion
   if (this.date) {
     const d = new Date(this.date);
     d.setUTCHours(0, 0, 0, 0);
     this.date = d;
   }
 
-  // next();
+  next();
 });
 
 // ─── Query Middleware: Soft delete filter ─────────────────────────────────────

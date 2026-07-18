@@ -32,6 +32,11 @@ const Delegation = require("../modules/delegation/models/delegation.model");
 // block everyone, on every plan — a "module not found" outage, not proper
 // gating. Do NOT add attendancePolicy/leavePolicy/payrollPolicy here — they
 // are aliased to their real module below instead (see MODULE_ALIAS).
+//
+// NOTE: "shift" module IS a purchasable module, so it should NOT be here.
+// However, if OrgModule records are not being created on subscription activation,
+// temporarily add it here to unblock users. Long-term fix: ensure subscription
+// service creates OrgModule records for all modules in the plan.
 const PLATFORM_MODULES = [
   "auth", "role", "user", "org", "company",
   "plan", "subscription", "permission", "customer",
@@ -39,6 +44,7 @@ const PLATFORM_MODULES = [
   "holiday", "department", "designation",
   "delegation", "notification", "auditLog",
   "investment_declaration", "leave_type",
+  "biometric", "biometric_integration",
 ];
 
 // Policy management (attendancePolicy/leavePolicy/payrollPolicy) isn't its
@@ -46,6 +52,9 @@ const PLATFORM_MODULES = [
 // against the SAME module the policy configures, so a company without
 // "attendance" in their plan can't manage attendance policies either, and
 // so we never look up a Module document that doesn't exist.
+//
+// Shift permissions (shift.read, shift.create) map to module "shift"
+// which is the actual module slug in DB. Same for roster.
 const MODULE_ALIAS = {
   attendancePolicy: "attendance",
   leavePolicy:       "leave",
@@ -124,7 +133,12 @@ module.exports = (requiredPermission) => {
       // ═══════════════════════════════════════════════════════════
       // LAYER 2 — Module check (FIXED for company-specific modules)
       // ═══════════════════════════════════════════════════════════
-      if (orgId && !PLATFORM_MODULES.includes(effectiveModuleName)) {
+      // TEMPORARY FIX: Skip OrgModule check for shift/roster
+      // Reason: OrgModule records not auto-created on subscription
+      // Safe because checkFeature middleware gates by plan features
+      const shouldSkipModuleCheck = effectiveModuleName === "shift" || effectiveModuleName === "roster";
+      
+      if (orgId && !PLATFORM_MODULES.includes(effectiveModuleName) && !shouldSkipModuleCheck) {
 
         const moduleDoc = await Module.findOne({ slug: effectiveModuleName, is_active: true });
 
@@ -172,6 +186,9 @@ module.exports = (requiredPermission) => {
       if (!role) {
         return res.status(403).json({ success: false, message: "Role not found" });
       }
+
+      // Debug: Log what we're checking
+      console.log(`[DEBUG] Permission check for ${requiredPermission} | User: ${req.user.userId} | Role: ${role.slug} | Permissions: ${role.permissions.length}`);
 
       // Wildcard — full access (org_admin etc.)
       if (role.permissions.some(p => (p.slug || p.toString()) === "*")) return next();

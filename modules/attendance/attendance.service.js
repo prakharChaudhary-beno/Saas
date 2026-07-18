@@ -872,15 +872,20 @@ exports.getAllAttendance = async (query, user) => {
   if (user.unitId) filter.unit_id = user.unitId;
 
   // Date range handling
+const moment = require("moment-timezone");
+  const ORG_TZ = "Asia/Kolkata"; // TODO: pull from company config if per-org timezone varies
+
   if (startDate && endDate) {
-    // Use custom date range if provided
-    const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0);
-    
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
-    
+    // Interpret startDate/endDate as IST calendar dates (matching how
+    // getTodayDateInOrgTimezone stores the `date` field), then convert
+    // to the equivalent UTC range for the query. Using new Date(str) +
+    // setHours() here was UTC-naive and didn't match how dates are
+    // actually stored, causing "today" to appear under "yesterday".
+    const start = moment.tz(`${startDate} 00:00:00`, ORG_TZ).utc().toDate();
+    const end   = moment.tz(`${endDate} 23:59:59.999`, ORG_TZ).utc().toDate();
+
     filter.date = { $gte: start, $lte: end };
+
   } else if (month) {
     // Fallback to month if no date range
     const { start, end } = parseMonth(month);
@@ -964,14 +969,17 @@ exports.getTeamAttendance = async (query, user) => {
   };
 
   // Date range handling
+const moment = require("moment-timezone");
+  const ORG_TZ = "Asia/Kolkata"; // TODO: pull from company config if per-org timezone varies
+
   if (startDate && endDate) {
-    // Use custom date range if provided
-    const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0);
-    
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
-    
+    // Interpret startDate/endDate as IST calendar dates (matching how
+    // getTodayDateInOrgTimezone stores the `date` field). Same fix as
+    // getAllAttendance — was UTC-naive before, causing "today" to be
+    // missed or attributed to the wrong day for the team view too.
+    const start = moment.tz(`${startDate} 00:00:00`, ORG_TZ).utc().toDate();
+    const end   = moment.tz(`${endDate} 23:59:59.999`, ORG_TZ).utc().toDate();
+
     filter.date = { $gte: start, $lte: end };
   } else if (month) {
     // Fallback to month if no date range

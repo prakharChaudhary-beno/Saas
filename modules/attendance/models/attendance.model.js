@@ -384,11 +384,18 @@ attendanceSchema.pre("save", async function () {
 
   // Date ko midnight pe normalize karo (service layer should use org timezone midnight)
   // This is UTC midnight - service layer handles timezone conversion
-  if (this.date) {
-    const d = new Date(this.date);
-    d.setUTCHours(0, 0, 0, 0);
-    this.date = d;
-  }
+//   if (this.date) {
+//     const d = new Date(this.date);
+//     d.setUTCHours(0, 0, 0, 0);
+//     this.date = d;
+//   }
+  // if (this.date) {
+  //   const d = new Date(this.date);
+  //   d.setUTCHours(0, 0, 0, 0);
+  //   this.date = d;
+  // }
+
+  // next();
 });
 
 // ─── Query Middleware: Soft delete filter ─────────────────────────────────────

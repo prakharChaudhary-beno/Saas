@@ -101,6 +101,17 @@ exports.login = async (payload) => {
   if (user) {
     if (user.status !== "ACTIVE") throw new AppError("Account not active", 403);
 
+    // Safety net — even if User.status somehow stayed ACTIVE while the
+    // linked Employee was terminated (a sync miss elsewhere), a terminated
+    // employee must never be able to log in. This check is independent of
+    // wherever Employee.status gets set, so it can't be bypassed by a
+    // missed sync in some other code path.
+    const terminatedEmployee = await Employee.findOne({
+      userId: user._id,
+      status: "TERMINATED",
+    }).select("_id").lean();
+    if (terminatedEmployee) throw new AppError("Account not active", 403);
+
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) throw new AppError("Invalid credentials", 401);
 

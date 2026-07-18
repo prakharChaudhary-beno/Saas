@@ -54,7 +54,9 @@ const departmentSchema = new mongoose.Schema(
 );
 
 // Unique department name per unit
-departmentSchema.index({ unit_id: 1, name: 1 }, { unique: true });
-departmentSchema.index({ unit_id: 1, isDeleted: 1 });
+departmentSchema.index(
+  { unit_id: 1, name: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } }
+);departmentSchema.index({ unit_id: 1, isDeleted: 1 });
 
 module.exports = mongoose.model("Department", departmentSchema);

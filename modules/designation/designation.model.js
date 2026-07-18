@@ -54,7 +54,9 @@ const designationSchema = new mongoose.Schema(
 );
 
 // Unique designation name per unit
-designationSchema.index({ unit_id: 1, name: 1 }, { unique: true });
-designationSchema.index({ unit_id: 1, isDeleted: 1 });
+designationSchema.index(
+  { unit_id: 1, name: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } }
+);designationSchema.index({ unit_id: 1, isDeleted: 1 });
 
 module.exports = mongoose.model("Designation", designationSchema);

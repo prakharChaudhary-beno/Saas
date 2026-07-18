@@ -47,6 +47,7 @@ const shiftSwapRoutes  = require("./modules/shift/shiftSwap.routes");
 const delegationRoutes = require("./modules/delegation/delegation.routes");
 const regularisationPolicyRoutes = require("./modules/attendance/regularisationPolicy.routes");
 const policyVersionRoutes       = require("./modules/policyVersion/policyVersion.routes");
+const biometricRoutes           = require("./modules/biometric/biometric.routes");
 
 router.use("/auth",         authRoutes);
 router.use("/auth/mfa",     mfaRoutes);
@@ -98,5 +99,8 @@ router.use("/shift-swaps",  shiftSwapRoutes);
 router.use("/delegations",  delegationRoutes);
 router.use("/regularisation/policies", regularisationPolicyRoutes);
 router.use("/policy-versions", policyVersionRoutes);
+
+// ── Biometric Integration ─────────────────────────────────────────────────
+router.use("/biometric", biometricRoutes);
 
 module.exports = router;

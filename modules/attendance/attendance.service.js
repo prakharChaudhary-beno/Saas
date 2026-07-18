@@ -12,6 +12,20 @@ const LeaveRequest = require("../leave/models/leaveRequest.models");  // T-20
 // Priority: active roster → unit default shift → attendancePolicy fallback
 const { resolveShiftForEmployee } = require("../shift/shift.service");
 
+// Timezone utilities for enterprise HRMS
+const {
+  nowInTimezone,
+  getTodayDateInOrgTimezone,
+  validateShiftWindowTimezone,
+  calculateWorkingHours,
+  calculateOvertime,
+  getPunchInStatus,
+  formatInTimezone,
+  formatTimeOnly,
+  formatShiftTime,
+  getDayOfWeek
+} = require("../../utils/timezone");
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,6 +74,84 @@ const calcLateStatus = (checkInDate, shiftStart, graceMinutes) => {
   const isLate      = lateMinutes > 0;
 
   return { isLate, lateMinutes };
+};
+
+/**
+ * ─── SHIFT WINDOW VALIDATION ─────────────────────────────────────
+ * Checks if punch-in is within allowed shift window.
+ * 
+ * Enterprise Rule: Employees can only punch-in during their shift hours.
+ * - For day shifts (09:00-18:00): Punch-in allowed from shiftStart up to shiftEnd
+ * - For night shifts (21:00-06:00): Punch-in allowed across midnight boundary
+ * 
+ * Policy Override: AttendancePolicy.shift.allowLatePunchIn can relax this
+ * 
+ * @param {Date} punchTime - Current time
+ * @param {string} shiftStart - "HH:MM" format
+ * @param {string} shiftEnd - "HH:MM" format  
+ * @param {boolean} isNextDay - true for night shifts crossing midnight
+ * @param {number} graceMinutes - grace period after shift start
+ * @param {object} policy - AttendancePolicy with allowLatePunchIn, maxLateMinutes settings
+ * @returns {isValid: boolean, reason: string, isTooEarly: boolean, isTooLate: boolean}
+ */
+const validateShiftWindow = (punchTime, shiftStart, shiftEnd, isNextDay, graceMinutes, policy = {}) => {
+  const { hours: startH, minutes: startM } = parseTime(shiftStart);
+  const { hours: endH, minutes: endM } = parseTime(shiftEnd);
+  
+  // Create shift start/end times for today
+  const shiftStartTime = new Date(punchTime);
+  shiftStartTime.setUTCHours(startH, startM, 0, 0);
+  
+  const shiftEndTime = new Date(punchTime);
+  if (isNextDay) {
+    // Night shift: endTime is next day
+    shiftEndTime.setUTCDate(shiftEndTime.getUTCDate() + 1);
+  }
+  shiftEndTime.setUTCHours(endH, endM, 0, 0);
+  
+  // Calculate punch-in window boundaries
+  // Window opens: shiftStart - 30 minutes (allow early arrival)
+  // Window closes: shiftEnd (hard stop for day shift) or configurable for night shift
+  const allowEarlyMinutes = policy?.allowEarlyMinutes ?? 30; // default 30 min before
+  const windowOpenTime = new Date(shiftStartTime);
+  windowOpenTime.setUTCMinutes(windowOpenTime.getUTCMinutes() - allowEarlyMinutes);
+  
+  let windowCloseTime = shiftEndTime;
+  
+  // Policy override: allowLatePunchIn with maxLateMinutes
+  if (policy?.allowLatePunchIn && policy?.maxLateMinutes) {
+    const extendedClose = new Date(shiftStartTime);
+    extendedClose.setUTCMinutes(extendedClose.getUTCMinutes() + graceMinutes + policy.maxLateMinutes);
+    windowCloseTime = extendedClose > shiftEndTime ? extendedClose : shiftEndTime;
+  }
+  
+  // Allow configuration from policy for strict window
+  const strictWindow = policy?.strictPunchWindow !== false; // default true
+  
+  const isTooEarly = punchTime < windowOpenTime;
+  const isTooLate = strictWindow && punchTime > windowCloseTime;
+  const isValid = !isTooEarly && !isTooLate;
+  
+  let reason = "";
+  if (isTooEarly) {
+    reason = `Punchin too early. Shift starts at ${shiftStart}. Please wait until ${shiftStart}`;
+  } else if (isTooLate) {
+    const closeStr = policy?.allowLatePunchIn 
+      ? `${policy.maxLateMinutes} minutes after shift start`
+      : shiftEnd;
+    reason = `Punch-in denied. Shift window closed at ${closeStr}. Your shift has ended.`;
+  }
+  
+  return {
+    isValid,
+    reason,
+    isTooEarly,
+    isTooLate,
+    windowOpen: windowOpenTime,
+    windowClose: windowCloseTime,
+    shiftStart: shiftStartTime,
+    shiftEnd: shiftEndTime
+  };
 };
 
 /**
@@ -171,13 +263,21 @@ const captureEmployeeLocation = async (req, unitId, employeeId) => {
 
 exports.punchIn = async (data, user, req = null) => {
   const { isWFH = false, remarks, geolocation } = data
-  const now = new Date()
-
+  
+  // ── 0. Fetch CompanyConfig for timezone ───────────────────────
+  const companyConfig = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId })
+    .select('timezone overtimeThresholdHours overtimeEnabled halfDayThresholdHours')
+    .lean();
+  
+  const timezone = companyConfig?.timezone || 'Asia/Kolkata';
+  const now = new Date(); // UTC timestamp
+  const nowOrgTime = nowInTimezone(timezone); // Current time in org timezone
+  
   // ── 1. Get employee ──────────────────────────────────────────
   const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId)
 
-  // ── 2. Today ki date (UTC midnight) ──────────────────────────
-  const today = toUTCMidnight(now)
+  // ── 2. Today ki date (org timezone midnight) ──────────────────
+  const today = getTodayDateInOrgTimezone(timezone);
 
   // ── 3. Fetch Unit with geolocation settings ─────────────────────────────
   const unit = await Unit.findById(user.unitId).select('geolocation locationSettings name').lean()
@@ -292,6 +392,8 @@ exports.punchIn = async (data, user, req = null) => {
   // shiftSource saved in attendance record for audit trail
 
   let shiftStart      = "09:00";  // last resort default
+  let shiftEnd        = "18:00";  // last resort default
+  let isNextDay       = false;   // night shift flag
   let graceMinutes    = 15;
   let standardHours   = 8;
   let halfDayThreshold = 4;
@@ -313,6 +415,8 @@ exports.punchIn = async (data, user, req = null) => {
     if (shiftResult?.shift) {
       const s         = shiftResult.shift;
       shiftStart      = s.startTime;                               // "HH:MM"
+      shiftEnd        = s.endTime;                                 // "HH:MM"
+      isNextDay       = s.isNextDay ?? false;                      // night shift
       graceMinutes    = s.gracePeriodMinutes    ?? 15;
       standardHours   = (s.workingMinutes ?? 480) / 60;           // minutes → hours
       halfDayThreshold = (s.halfDayThresholdMinutes ?? 240) / 60; // minutes → hours
@@ -335,6 +439,8 @@ exports.punchIn = async (data, user, req = null) => {
   // If no shift found from roster/default → use policy values
   if (shiftSource === "policy_default" && attendancePolicy) {
     shiftStart       = attendancePolicy.shift?.start          ?? "09:00";
+    shiftEnd         = attendancePolicy.shift?.end          ?? "18:00";
+    isNextDay        = attendancePolicy.shift?.isNextDay     ?? false;
     graceMinutes     = attendancePolicy.shift?.graceMinutes   ?? 15;
     standardHours    = attendancePolicy.shift?.minimumHours   ?? 8;
     halfDayThreshold = attendancePolicy.shift?.halfDayMinHours ?? 4;
@@ -342,15 +448,43 @@ exports.punchIn = async (data, user, req = null) => {
   }
 
   // CompanyConfig — overtime threshold (supplement, not replaced by shift)
-  const config = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId })
-    .select("overtimeThresholdHours halfDayThresholdHours")
-    .lean();
+  const config = companyConfig; // Already fetched at top
 
   const overtimeThreshold = config?.overtimeThresholdHours ?? standardHours + 1;
+  const overtimeEnabled = config?.overtimeEnabled ?? true; // OT enabled by default
   // CompanyConfig halfDay override if explicitly set
   if (config?.halfDayThresholdHours) halfDayThreshold = config.halfDayThresholdHours;
 
-  const { isLate, lateMinutes } = calcLateStatus(now, shiftStart, graceMinutes);
+  // ── 6b. SHIFT WINDOW VALIDATION (Enterprise HRMS - Timezone Aware) ─
+  // Validate punch-in is within allowed shift window
+  // Policy can override: allowLatePunchIn, maxLateMinutes, strictPunchWindow
+  const shiftPolicy = attendancePolicy?.shift || {};
+  
+  const windowValidation = validateShiftWindowTimezone(
+    now, // UTC punch time
+    shiftStart,
+    shiftEnd,
+    isNextDay,
+    graceMinutes,
+    timezone, // Organization timezone
+    shiftPolicy
+  );
+  
+  // Only enforce if policy has strictPunchWindow enabled (default true)
+  if (shiftPolicy.strictPunchWindow !== false) {
+    if (!windowValidation.isValid) {
+      throw new AppError(
+        windowValidation.reason ||
+        `Punch-in denied. Your shift is ${formatShiftTime(shiftStart)} - ${formatShiftTime(shiftEnd)}.`,
+        403
+      );
+    }
+  }
+
+  // Determine punch-in status using timezone-aware function
+  const punchInStatus = getPunchInStatus(now, shiftStart, graceMinutes, timezone);
+  const isLate = punchInStatus === 'LATE';
+  const lateMinutes = isLate ? Math.ceil((nowOrgTime - windowValidation.shiftStart) / (1000 * 60)) : 0;
 
   // ── 7. Determine initial status (T-19 + T-20) ────────────────
   let status = "PRESENT";
@@ -378,7 +512,9 @@ exports.punchIn = async (data, user, req = null) => {
         date:         today,
         standardHours,
         shiftStart,
+        shiftEnd,
         graceMinutes,
+        isNextDay,
         // Shift resolution metadata — audit trail + punch-out uses same values
         shiftId:          resolvedShiftId  || null,  // Shift doc used
         rosterId:         resolvedRosterId || null,   // Roster doc (null if default/policy)
@@ -423,13 +559,21 @@ exports.punchIn = async (data, user, req = null) => {
 
 exports.punchOut = async (data, user) => {
   const { remarks } = data;
-  const now = new Date();
+  
+  // ── 0. Fetch CompanyConfig for timezone ───────────────────────
+  const companyConfig = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId })
+    .select('timezone overtimeThresholdHours overtimeEnabled halfDayThresholdHours')
+    .lean();
+  
+  const timezone = companyConfig?.timezone || 'Asia/Kolkata';
+  const now = new Date(); // UTC timestamp
+  const nowOrgTime = nowInTimezone(timezone); // Current time in org timezone
 
   // ── 1. Get employee ──────────────────────────────────────────
   const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId);
 
-  // ── 2. Today ka record dhundo ─────────────────────────────────
-  const today = toUTCMidnight(now);
+  // ── 2. Today ka record dhundo (org timezone midnight) ─────────
+  const today = getTodayDateInOrgTimezone(timezone);
 
   const record = await Attendance.findOne({
     org_id:     user.orgId,
@@ -468,8 +612,28 @@ exports.punchOut = async (data, user) => {
     );
   }
 
-  // ── 6. workingHours & overtimeHours (pre-save hook handles it) ─
- record.checkOut  = now;
+  // ── 6. workingHours & overtimeHours (timezone-aware) ─────────
+  // Calculate using timezone-aware utility
+  const workingHours = calculateWorkingHours(record.checkIn, now, timezone);
+  const overtimeEnabled = companyConfig?.overtimeEnabled ?? true;
+  const overtimeThreshold = record.overtimeThreshold || 0;
+  
+  // Calculate overtime only if enabled
+  let overtimeHours = 0;
+  if (overtimeEnabled) {
+    overtimeHours = calculateOvertime(
+      now,
+      record.shiftEnd,
+      record.isNextDay,
+      record.date, // Shift reference date
+      timezone,
+      overtimeThreshold
+    );
+  }
+  
+  record.checkOut  = now;
+  record.workingHours = workingHours;
+  record.overtimeHours = overtimeHours;
   record.updatedBy = user.userId;
   if (remarks) record.remarks = remarks;
 
@@ -478,8 +642,6 @@ exports.punchOut = async (data, user) => {
   // (already resolved from roster/shift/policy at punch-in time)
   // No DB re-query needed — values saved in $setOnInsert
   try {
-    const workingHours   = diffMinutes / 60;
-
     // Read thresholds from the record itself (saved at punch-in from shift resolution)
     const halfDayMin = record.halfDayThreshold  || 4;
     const fullDayMin = record.standardHours     || 8;
@@ -502,7 +664,7 @@ exports.punchOut = async (data, user) => {
     console.error("HALF_DAY detection error:", e.message);
   }
 
-  await record.save(); // pre-save hook calculates workingHours
+  await record.save();
 
   return record;
 };
@@ -589,7 +751,13 @@ exports.getMyAttendance = async (query, user) => {
 
 exports.getTodayStatus = async (user) => {
   const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId);
-  const today    = toUTCMidnight(new Date());
+  
+  // CRITICAL: Use org timezone to match the date field used during punch-in
+  // Attendance records are created with org timezone midnight (getTodayDateInOrgTimezone)
+  const CompanyConfig = require('../companyConfig/models/companyConfig.model');
+  const config = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId }).select('timezone').lean();
+  const timezone = config?.timezone || 'Asia/Kolkata';
+  const today = getTodayDateInOrgTimezone(timezone);
 
   const record = await Attendance.findOne({
     org_id:     user.orgId,
@@ -942,8 +1110,14 @@ exports.regularize = async (attendanceId, data, user) => {
 // Get all currently clocked-in employees with their profile info
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getAllClockedIn = async (user) => {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  // CRITICAL: Use org timezone to match the date field used during punch-in
+  // Attendance records are created with org timezone midnight (getTodayDateInOrgTimezone)
+  // If we use UTC midnight here, we'll get NO RESULTS for IST timezone
+  const CompanyConfig = require('../companyConfig/models/companyConfig.model');
+  const config = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId }).select('timezone').lean();
+  const timezone = config?.timezone || 'Asia/Kolkata';
+  
+  const today = getTodayDateInOrgTimezone(timezone);
 
   // Find all attendance records for today where checkOut is null (still clocked in)
   const clockedInRecords = await Attendance.find({

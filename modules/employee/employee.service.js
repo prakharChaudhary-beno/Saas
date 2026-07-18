@@ -131,14 +131,12 @@ exports.createEmployee = async (payload, user) => {
     is_active: true,
   }).select("plan_snapshot.seat_limit").lean();
 
-const seatLimit = subscription?.plan_snapshot?.seat_limit;
+  const seatLimit = subscription?.plan_snapshot?.seat_limit;
   if (seatLimit !== null && seatLimit !== undefined) {
-    // Seat limit applies at the ORG level (shared across all companies
-    // under this org), matching inviteUser's scope — not per-company.
     const currentCount = await Employee.countDocuments({
-      org_id:    user.orgId,
-      isDeleted: false,
-      status:    { $nin: ["TERMINATED"] },
+      company_id: user.companyId,
+      isDeleted:  false,
+      status:     { $nin: ["TERMINATED"] },
     });
     if (currentCount >= seatLimit) {
       throw new AppError(
@@ -435,12 +433,10 @@ exports.updateEmployee = async (id, data, user) => {
   employee.updatedBy = user.userId;
   await employee.save();
 
+  // ─── Sync User.status when Employee.status changes ────────────────────────
   if (data.status && employee.userId) {
-    // User.status only allows ACTIVE/INACTIVE/BLOCKED (no TERMINATED in its
-    // enum) — map Employee's employment-status vocabulary to User's
-    // account-status vocabulary instead of writing an invalid value.
-    const userStatus = data.status === "TERMINATED" ? "INACTIVE" : data.status;
-    await User.findByIdAndUpdate(employee.userId, { status: userStatus });
+    const { syncEmployeeStatusToUser } = require('../../utils/statusSync');
+    await syncEmployeeStatusToUser(employee._id, data.status, user.userId);
   }
 
   // Audit log — detect what changed
@@ -519,7 +515,7 @@ exports.activateLogin = async (id, payload, user) => {
     email:  employee.email,
     org_id: employee.org_id,
   });
-
+console.log("existingUser",existingUser)
   if (existingUser) {
     if (existingUser.isDeleted) {
       existingUser.isDeleted = false;
@@ -531,12 +527,29 @@ exports.activateLogin = async (id, payload, user) => {
     } else if (existingUser.isModified()) {
       await existingUser.save();
     }
-    if (!employee.userId) {
-      employee.status    = "ACTIVE";
-      employee.userId    = existingUser._id;
-      employee.updatedBy = user.userId;
-      await employee.save();
-    }
+    
+    // ALWAYS sync Employee.status to ACTIVE when activating login
+    // Using findByIdAndUpdate to guarantee DB update (avoid Mongoose document tracking issues)
+    console.log('=== ACTIVATE LOGIN DEBUG ===');
+    console.log('Employee ID:', employee._id);
+    console.log('Employee email:', employee.email);
+    console.log('Employee current status (before update):', employee.status);
+    console.log('Existing User ID:', existingUser._id);
+    
+    const updateResult = await Employee.findByIdAndUpdate(
+      employee._id,
+      {
+        status: "ACTIVE",
+        userId: existingUser._id,
+        updatedBy: user.userId
+      },
+      { new: true }
+    );
+    
+    console.log('Employee status AFTER update:', updateResult?.status);
+    console.log('Update result:', updateResult ? 'SUCCESS' : 'FAILED');
+    console.log('=== END DEBUG ===');
+    
     return {
       message: "Login already exists — linked successfully",
       user: { id: existingUser._id, email: existingUser.email, role: role.name, status: existingUser.status }
@@ -607,8 +620,10 @@ exports.changeStatus = async (id, payload, user) => {
   employee.updatedBy = user.userId;
   await employee.save();
 
+  // ─── Sync User.status with mapped value ─────────────────────────────────────
   if (employee.userId) {
-    await User.findByIdAndUpdate(employee.userId, { status });
+    const { syncEmployeeStatusToUser } = require('../../utils/statusSync');
+    await syncEmployeeStatusToUser(employee._id, status, user.userId);
   }
 
   return {

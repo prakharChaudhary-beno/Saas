@@ -486,18 +486,10 @@ exports.updateUser = async (id, data, currentUser) => {
   user.updatedBy = currentUser.userId;
   await user.save();
 
-  // Keep the linked Employee's status in sync too — mirrors the fix already
-  // in employee.service.js's updateEmployee, but in the other direction.
-  // Without this, reactivating via /users/:id makes login work (User.status
-  // is correct) but Employee fetch still shows stale INACTIVE, since
-  // Employee.status was never touched here.
+  // ─── Sync Employee.status when User.status changes ────────────────────────
   if (data.status) {
-    // Employee has no "BLOCKED" status — map it to INACTIVE on that side.
-    const employeeStatus = data.status === "BLOCKED" ? "INACTIVE" : data.status;
-    await Employee.findOneAndUpdate(
-      { userId: user._id, isDeleted: false },
-      { status: employeeStatus }
-    );
+    const { syncUserStatusToEmployee } = require('../../utils/statusSync');
+    await syncUserStatusToEmployee(user._id, data.status, currentUser.userId);
   }
 
   // Department change — Employee model
@@ -605,6 +597,10 @@ exports.deleteUser = async (id, currentUser) => {
   user.status    = "INACTIVE";
   user.updatedBy = currentUser.userId;
   await user.save();
+
+  // ─── Sync Employee.status when User is deleted ───────────────────────────
+  const { syncUserStatusToEmployee } = require('../../utils/statusSync');
+  await syncUserStatusToEmployee(id, 'INACTIVE', currentUser.userId);
 
   return { message: "User deleted successfully" };
 };

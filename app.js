@@ -209,6 +209,37 @@ if (cron) {
   });
 
   console.log('[Cron] Shift swap auto-expiry scheduled — runs at midnight daily');
+
+  // ─── Shift Finalization Cron ───────────────────────────────────────
+  // Runs every hour to finalize attendance records after shift ends
+  const { runShiftFinalization } = require('./jobs/shiftFinalization.job');
+
+  cron.schedule('0 * * * *', async () => {
+    console.log('[Cron] Running shift finalization...');
+    try {
+      const result = await runShiftFinalization(120); // 2 hours buffer
+      console.log(`[Cron] Shift finalization complete: ${result.finalized} finalized, ${result.autoPunchedOut} auto-punched out, ${result.flagged} flagged`);
+    } catch (err) {
+      console.error('[Cron] Shift finalization failed:', err.message);
+    }
+  });
+
+  console.log('[Cron] Shift finalization scheduled — runs every hour');
+
+  // ─── Delegation Expiry Cron ───────────────────────────────────────
+  const { expireOldDelegations } = require('./modules/delegation/delegation.service')
+
+  cron.schedule('0 0 * * *', async () => {
+    console.log('[Cron] Running delegation expiry...')
+    try {
+      const result = await expireOldDelegations()
+      console.log(`[Cron] Delegation expiry: ${result.expired} delegations marked as expired`)
+    } catch (err) {
+      console.error('[Cron] Delegation expiry failed:', err.message)
+    }
+  })
+
+  console.log('[Cron] Delegation expiry scheduled — runs at midnight daily');
 }
 
 module.exports = app;

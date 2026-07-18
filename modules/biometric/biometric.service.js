@@ -583,16 +583,15 @@ exports.pullAttendanceFromDevice = async (configId, serialNumber, options, user)
     const adapter     = createAdapter(config.vendor, credentials);
 
     // Determine time range
-    const startTime = options?.startTime || new Date(Date.now() - 24 * 60 * 60 * 1000); // Default: last 24h
-    const endTime   = options?.endTime || new Date();
-    const fromRecordId = device.lastSyncedRecordId;
+    const fromDateTime = options?.startTime || new Date(Date.now() - 24 * 60 * 60 * 1000); // Default: last 24h
+    const toDateTime   = options?.endTime || new Date();
 
-    // Pull transactions
+    // Pull transactions - pass serialNumber and date params correctly
     const result = await adapter.pullTransactions({
-      startTime,
-      endTime,
-      fromRecordId
-    }, serialNumber);
+      deviceSerialNumber: serialNumber,
+      fromDateTime,
+      toDateTime
+    });
 
     if (!result.success) {
       syncLog.status = 'FAILED';
@@ -627,13 +626,24 @@ exports.pullAttendanceFromDevice = async (configId, serialNumber, options, user)
     });
 
     return {
-      success:        true,
+      success: true,
+      syncLogId: syncLog._id,
       recordsFetched: result.records.length,
       recordsMatched: processedResult.matchedCount,
       recordsCreated: processedResult.createdCount,
       recordsUpdated: processedResult.updatedCount,
       unmatchedCount: processedResult.unmatchedCount,
-      syncLogId:      syncLog._id
+      // Pagination metadata
+      pagination: {
+        matchedTotal: processedResult.matchedRecords.length,
+        unmatchedTotal: processedResult.unmatchedRecords.length,
+        matchedReturned: Math.min(50, processedResult.matchedRecords.length),
+        unmatchedReturned: Math.min(50, processedResult.unmatchedRecords.length)
+      },
+      // Auto-created attendance records (matched)
+      matchedRecords: processedResult.matchedRecords.slice(0, 50),
+      // Unmatched for code assignment
+      unmatchedRecords: processedResult.unmatchedRecords.slice(0, 50)
     };
 
   } catch (error) {
@@ -648,118 +658,303 @@ exports.pullAttendanceFromDevice = async (configId, serialNumber, options, user)
 };
 
 // ─── PROCESS PUNCH RECORDS ────────────────────────────────────────────────
+// Groups punches by employee, finds first (checkIn) and last (checkOut) punch
+// Returns unique records per employee per day
 const processPunchRecords = async (records, config, device, user) => {
   const result = {
-    processedCount:  0,
-    matchedCount:    0,
-    unmatchedCount:  0,
-    createdCount:    0,
-    updatedCount:    0,
-    failedCount:     0,
-    unmatchedRecords: []
+    processedCount: 0,
+    matchedCount: 0,
+    unmatchedCount: 0,
+    createdCount: 0,
+    updatedCount: 0,
+    failedCount: 0,
+    unmatchedRecords: [],
+    matchedRecords: []
   };
 
+  // ─── STEP 1: Group punches by employeeCode ───────────────────────────────
+  const punchesByEmployee = {};
+  
   for (const record of records) {
+    const code = record.employeeCode;
+    if (!punchesByEmployee[code]) {
+      punchesByEmployee[code] = [];
+    }
+    punchesByEmployee[code].push({
+      punchTime: new Date(record.punchTime),
+      punchType: record.punchType
+    });
+  }
+
+  // ─── STEP 2: Process each unique employee ────────────────────────────────
+  for (const [employeeCode, punches] of Object.entries(punchesByEmployee)) {
     try {
-      // Find employee by biometricCode
+      // Sort punches by time (earliest first)
+      punches.sort((a, b) => a.punchTime - b.punchTime);
+      
+      const firstPunch = punches[0];
+      const lastPunch = punches[punches.length - 1];
+      const punchDate = new Date(firstPunch.punchTime);
+      punchDate.setUTCHours(0, 0, 0, 0);
+
+      // Find employee with full profile
       const employee = await Employee.findOne({
-        biometricCode: parseInt(record.employeeCode),
-        org_id:        config.org_id,
-        company_id:    config.company_id,
-        unit_id:       config.unit_id,
-        isDeleted:     false
-      });
+        biometricCode: parseInt(employeeCode),
+        org_id: config.org_id,
+        company_id: config.company_id,
+        unit_id: config.unit_id,
+        isDeleted: false
+      }).populate('departmentId', 'name')
+        .populate('designationId', 'name')
+        .populate('reportingManagerId', 'fullName');
 
       if (!employee) {
-        // Check manual mapping
-        const mapping = await BiometricMapping.findByDeviceCode(
-          device.serialNumber,
-          record.employeeCode
-        );
+        // Check mapping
+        const mapping = await BiometricMapping.findOne({
+          biometricCode: employeeCode,
+          org_id: config.org_id,
+          company_id: config.company_id
+        }).populate({
+          path: 'employeeId',
+          populate: [
+            { path: 'departmentId', select: 'name' },
+            { path: 'designationId', select: 'name' },
+            { path: 'reportingManagerId', select: 'fullName' }
+          ]
+        });
 
         if (mapping && mapping.employeeId) {
           result.matchedCount++;
-          // Continue processing with mapped employee
-          await updateAttendanceFromPunch(mapping.employeeId, record, config, user);
+          
+          const attendanceResult = await updateAttendanceFromPunchWithTimes(
+            mapping.employeeId,
+            firstPunch.punchTime,
+            lastPunch.punchTime,
+            config,
+            user
+          );
+
+          result.matchedRecords.push({
+            employeeCode,
+            employeeId: mapping.employeeId._id,
+            employeeName: mapping.employeeId.fullName,
+            employeeEmail: mapping.employeeId.email || 'N/A',
+            employeePhoto: mapping.employeeId.profilePhoto || null,
+            department: mapping.employeeId.departmentId?.name || 'N/A',
+            designation: mapping.employeeId.designationId?.name || 'N/A',
+            reportingManager: mapping.employeeId.reportingManagerId?.fullName || 'N/A',
+            date: punchDate,
+            firstPunch: firstPunch.punchTime,
+            lastPunch: lastPunch.punchTime,
+            checkIn: attendanceResult?.attendance?.checkIn,
+            checkOut: attendanceResult?.attendance?.checkOut,
+            totalPunches: punches.length,
+            workingHours: attendanceResult?.attendance?.workingHours || 0,
+            status: attendanceResult?.attendance?.status || 'PRESENT',
+            created: attendanceResult?.created || false
+          });
+
+          if (attendanceResult?.created) result.createdCount++;
+          else if (attendanceResult?.updated) result.updatedCount++;
+
           result.processedCount++;
           continue;
         }
 
-        // Unmapped - log for admin
+        // Unmapped
         result.unmatchedCount++;
         result.unmatchedRecords.push({
-          employeeCode: record.employeeCode,
-          punchTime:    record.punchTime,
-          punchType:    record.punchType,
-          message:      'Employee not found with this biometric code'
+          employeeCode,
+          punchTime: firstPunch.punchTime,
+          lastPunchTime: lastPunch.punchTime,
+          totalPunches: punches.length,
+          message: 'Employee not found with this biometric code'
         });
         continue;
       }
 
+      // Matched employee
       result.matchedCount++;
       
-      // Update attendance
-      const attendanceResult = await updateAttendanceFromPunch(employee, record, config, user);
-      
-      if (attendanceResult.created) {
-        result.createdCount++;
-      } else {
-        result.updatedCount++;
-      }
+      const attendanceResult = await updateAttendanceFromPunchWithTimes(
+        employee,
+        firstPunch.punchTime,
+        lastPunch.punchTime,
+        config,
+        user
+      );
+
+      result.matchedRecords.push({
+        employeeCode,
+        employeeId: employee._id,
+        employeeName: employee.fullName,
+        employeeEmail: employee.email || 'N/A',
+        employeePhoto: employee.profilePhoto || null,
+        department: employee.departmentId?.name || 'N/A',
+        designation: employee.designationId?.name || 'N/A',
+        reportingManager: employee.reportingManagerId?.fullName || 'N/A',
+        date: punchDate,
+        firstPunch: firstPunch.punchTime,
+        lastPunch: lastPunch.punchTime,
+        checkIn: attendanceResult?.attendance?.checkIn,
+        checkOut: attendanceResult?.attendance?.checkOut,
+        totalPunches: punches.length,
+        workingHours: attendanceResult?.attendance?.workingHours || 0,
+        status: attendanceResult?.attendance?.status || 'PRESENT',
+        created: attendanceResult?.created || false
+      });
+
+      if (attendanceResult?.created) result.createdCount++;
+      else if (attendanceResult?.updated) result.updatedCount++;
 
       result.processedCount++;
 
     } catch (err) {
-      console.error('[BiometricService] Error processing record:', err.message);
+      console.error(`[BiometricService] Error processing employee ${employeeCode}:`, err.message);
       result.failedCount++;
     }
   }
 
+  // Sort matched records by first punch time (latest first)
+  result.matchedRecords.sort((a, b) => new Date(b.firstPunch) - new Date(a.firstPunch));
+
   return result;
 };
 
-// ─── UPDATE ATTENDANCE FROM PUNCH ──────────────────────────────────────────
-const updateAttendanceFromPunch = async (employee, punchRecord, config, user) => {
-  const punchDate = new Date(punchRecord.punchTime);
-  punchDate.setUTCHours(0, 0, 0, 0);
+// ─── UPDATE ATTENDANCE FROM PUNCH WITH TIMES ────────────────────────────────
+// Creates/updates attendance with firstPunch as checkIn, lastPunch as checkOut
+// Uses combined punch data (no more punch-by-punch processing)
+const updateAttendanceFromPunchWithTimes = async (employee, firstPunchTime, lastPunchTime, config, user) => {
+  const checkInTime = new Date(firstPunchTime);
+  const checkOutTime = new Date(lastPunchTime);
+  const startOfDay = new Date(checkInTime);
+  startOfDay.setUTCHours(0, 0, 0, 0);
 
-  // Find or create attendance for this date
+  // Find existing attendance for this employee on this date
   let attendance = await Attendance.findOne({
-    employee_id: employee._id,
-    date:        punchDate,
-    org_id:      config.org_id,
-    company_id:  config.company_id
+    employeeId: employee._id || employee,
+    date: startOfDay,
+    org_id: config.org_id,
+    company_id: config.company_id
   });
 
-  if (!attendance && punchRecord.punchType === 'CHECK_IN') {
+  if (!attendance) {
     // Create new attendance record
     attendance = await Attendance.create({
-      employee_id:          employee._id,
-      date:                 punchDate,
-      checkInTime:          punchRecord.punchTime,
-      punchSource:          'BIOMETRIC',
-      org_id:               config.org_id,
-      company_id:           config.company_id,
-      unit_id:              config.unit_id
+      employeeId: employee._id || employee,
+      userId: employee.userId || employee._id || employee,
+      date: startOfDay,
+      checkIn: checkInTime,
+      checkOut: checkOutTime > checkInTime ? checkOutTime : null,
+      status: 'PRESENT',
+      punchSource: checkOutTime > checkInTime ? 'BIOMETRIC_CLOSED' : 'BIOMETRIC',
+      org_id: config.org_id,
+      company_id: config.company_id,
+      unit_id: config.unit_id
     });
+
+    // Calculate working hours if checkOut exists
+    if (attendance.checkOut) {
+      const diffMs = new Date(attendance.checkOut) - new Date(attendance.checkIn);
+      attendance.workingHours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
+      await attendance.save();
+    }
+
+    console.log(`[BiometricService] Created attendance for ${employee.employeeId || employee}, checkIn: ${checkInTime}, checkOut: ${checkOutTime}`);
     return { created: true, attendance };
   }
 
-  if (attendance) {
-    // Update existing attendance
-    if (punchRecord.punchType === 'CHECK_OUT') {
-      attendance.checkOutTime = punchRecord.punchTime;
-      attendance.punchSource  = 'BIOMETRIC_CLOSED';
-    }
-    
-    await attendance.save();
-    return { created: false, updated: true, attendance };
+  // Attendance exists - update with new punch times
+  attendance.checkIn = checkInTime;
+  attendance.checkOut = checkOutTime > checkInTime ? checkOutTime : null;
+  attendance.punchSource = 'BIOMETRIC_CLOSED';
+
+  // Calculate working hours
+  if (attendance.checkOut) {
+    const diffMs = new Date(attendance.checkOut) - new Date(attendance.checkIn);
+    attendance.workingHours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
   }
 
-  return { created: false, updated: false };
+  await attendance.save();
+  console.log(`[BiometricService] Updated attendance for ${employee.employeeId || employee}, workingHours: ${attendance.workingHours}`);
+  return { created: false, updated: true, attendance };
 };
 
-// ─── GET SYNC LOGS ─────────────────────────────────────────────────────────
+// ─── GET SYNC LOG RECORDS (PAGINATED) ─────────────────────────────────────
+exports.getSyncLogRecords = async (syncLogId, type, page, limit, user) => {
+  const scopeFilter = buildScopeFilter(user);
+  const skip = (page - 1) * limit;
+
+  const syncLog = await BiometricSyncLog.findOne({
+    _id: syncLogId,
+    ...scopeFilter
+  });
+
+  if (!syncLog) {
+    throw new AppError('Sync log not found', 404);
+  }
+
+  if (type === 'unmatched') {
+    const records = syncLog.unmatchedRecords.slice(skip, skip + limit);
+    return {
+      records,
+      total: syncLog.unmatchedRecords.length,
+      page,
+      totalPages: Math.ceil(syncLog.unmatchedRecords.length / limit)
+    };
+  }
+
+  // For matched, fetch today's biometric attendance
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  const attendances = await Attendance.find({
+    org_id: scopeFilter.org_id,
+    company_id: scopeFilter.company_id,
+    date: today,
+    punchSource: { $in: ['BIOMETRIC', 'BIOMETRIC_CLOSED'] }
+  })
+  .populate('employeeId', 'employeeId fullName email biometricCode')
+  .populate({
+    path: 'employeeId',
+    populate: [
+      { path: 'departmentId', select: 'name' },
+      { path: 'designationId', select: 'name' }
+    ]
+  })
+  .sort({ checkIn: -1 })
+  .skip(skip)
+  .limit(limit);
+
+  const total = await Attendance.countDocuments({
+    org_id: scopeFilter.org_id,
+    company_id: scopeFilter.company_id,
+    date: today,
+    punchSource: { $in: ['BIOMETRIC', 'BIOMETRIC_CLOSED'] }
+  });
+
+  return {
+    records: attendances.map(a => ({
+      employeeId: a.employeeId?._id,
+      employeeCode: a.employeeId?.biometricCode,
+      employeeName: a.employeeId?.fullName,
+      employeeEmail: a.employeeId?.email,
+      department: a.employeeId?.departmentId?.name || 'N/A',
+      designation: a.employeeId?.designationId?.name || 'N/A',
+      punchTime: a.checkIn,
+      checkIn: a.checkIn,
+      checkOut: a.checkOut,
+      status: a.status,
+      workingHours: a.workingHours,
+      created: true
+    })),
+    total,
+    page,
+    totalPages: Math.ceil(total / limit)
+  };
+};
+
+// ─── GET SYNC LOGS ──────────────────────────────────────────────────��──────
 exports.getSyncLogs = async (unitId, options, user) => {
   const scopeFilter = buildScopeFilter(user);
   
@@ -881,7 +1076,8 @@ exports.getCommands = async (unitId, options, user) => {
 
 // ─── POLL COMMAND STATUS ──────────────────────────────────────────────────
 exports.pollCommandStatus = async (commandId, user) => {
-  const command = await BiometricCommand.findById(commandId);
+  // commandId is a string identifier (not ObjectId), query by commandId field
+  const command = await BiometricCommand.findOne({ commandId });
   
   if (!command) {
     throw new AppError('Command not found', 404);
@@ -1000,3 +1196,276 @@ exports.deleteMapping = async (mappingId, user) => {
 
   return { message: 'Mapping removed successfully' };
 };
+
+// ─── ASSIGN BIOMETRIC CODE TO EMPLOYEE ─────────────────────────────────────
+// Used when sync finds unmatched records - allows admin to assign existing
+// biometric code from device to an employee in HRMS
+exports.assignBiometricCode = async (employeeId, biometricCode, user) => {
+  const scopeFilter = buildScopeFilter(user);
+  const MIN_BIOMETRIC_CODE = 1001;
+
+  // Validate biometricCode
+  const code = parseInt(biometricCode, 10);
+  if (isNaN(code) || code < MIN_BIOMETRIC_CODE) {
+    throw new AppError(`biometricCode must be >= ${MIN_BIOMETRIC_CODE}`, 400);
+  }
+
+  // Find employee within scope
+  const employee = await Employee.findOne({
+    _id:       employeeId,
+    ...scopeFilter,
+    isDeleted: false
+  });
+
+  if (!employee) {
+    throw new AppError('Employee not found', 404);
+  }
+
+  // Check if employee already has biometricCode
+  if (employee.biometricCode) {
+    throw new AppError('Employee already has a biometric code assigned', 400);
+  }
+
+  // Check if biometricCode is already assigned to another employee
+  const existingWithCode = await Employee.findOne({
+    unit_id:       employee.unit_id,
+    biometricCode: code,
+    isDeleted:     false
+  });
+
+  if (existingWithCode) {
+    throw new AppError(`Biometric code ${code} is already assigned to ${existingWithCode.name}`, 409);
+  }
+
+  // Assign the code
+  employee.biometricCode = code;
+  await employee.save();
+
+  // Update BiometricCounter to prevent conflicts
+  await BiometricCounter.findOneAndUpdate(
+    { unit_id: employee.unit_id },
+    { $max: { sequenceValue: code + 1 } },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+
+  return await Employee.findById(employee._id)
+    .populate('departmentId', 'name')
+    .populate('designationId', 'name')
+    .populate('unit_id', 'name');
+};
+
+// ─── GET EMPLOYEES WITHOUT BIOMETRIC CODE ──────────────────────────────────
+// Returns list of employees in unit who don't have biometricCode assigned
+exports.getEmployeesWithoutBiometricCode = async (unitId, user) => {
+  const scopeFilter = buildScopeFilter(user);
+  
+  // For unit-level users, buildScopeFilter already adds unit_id
+  // For org/company level users, add unit_id from parameter (convert to ObjectId)
+  if (!scopeFilter.unit_id) {
+    scopeFilter.unit_id = new mongoose.Types.ObjectId(unitId);
+  }
+  
+  const filter = {
+    ...scopeFilter,
+    isDeleted:  false,
+    status:     'ACTIVE',
+    $or: [
+      { biometricCode: null },
+      { biometricCode: { $exists: false } }
+    ]
+  };
+
+  console.log('[getEmployeesWithoutBiometricCode] Filter:', JSON.stringify(filter, null, 2));
+
+  const employees = await Employee.find(filter)
+    .select('name employeeId status departmentId designationId')
+    .populate('departmentId', 'name')
+    .populate('designationId', 'name')
+    .sort({ name: 1 })
+    .limit(100);
+
+  console.log(`[getEmployeesWithoutBiometricCode] Found ${employees.length} employees`);
+
+  return employees;
+};
+
+// ─── BULK PUSH ALL EMPLOYEES TO DEVICE ──────────────────────────────────
+// Push all active employees without biometricCode to a device
+exports.bulkPushEmployees = async (configId, serialNumber, user) => {
+  const scopeFilter = buildScopeFilter(user);
+  
+  const config = await BiometricConfig.findOne({
+    _id: configId,
+    ...scopeFilter,
+    isDeleted: false
+  });
+  
+  if (!config) {
+    throw new AppError('Biometric config not found', 404);
+  }
+  
+  // Find device in config
+  const device = config.devices.find(d => d.serialNumber === serialNumber);
+  if (!device) {
+    throw new AppError('Device not found in config', 404);
+  }
+  
+  // Get all active employees without biometricCode
+  const employees = await Employee.find({
+    ...scopeFilter,
+    isDeleted: false,
+    status: 'ACTIVE',
+    $or: [
+      { biometricCode: null },
+      { biometricCode: { $exists: false } }
+    ]
+  }).select('_id name employeeId biometricCode');
+  
+  if (employees.length === 0) {
+    return {
+      success: true,
+      message: 'No employees to push',
+      pushed: 0,
+      total: 0,
+      commandId: null
+    };
+  }
+  
+  // Create adapter
+  const adapter = await createAdapter(config);
+  
+  // Increment and assign biometric codes
+  const updates = [];
+  const employeesToPush = [];
+  
+  for (const emp of employees) {
+    // Get next biometric code
+    const counter = await BiometricCounter.findOneAndUpdate(
+      { unit_id: scopeFilter.unit_id || user.unitId },
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true }
+    );
+    
+    const biometricCode = counter.seq;
+    
+    // Update employee
+    emp.biometricCode = biometricCode;
+    await emp.save();
+    
+    employeesToPush.push({
+      employeeCode: biometricCode,
+      name: emp.name,
+      cardNumber: emp.rfidCardNumber || undefined
+    });
+    
+    updates.push({ employee: emp, biometricCode });
+  }
+  
+  // Push to device using bulk operation
+  console.log(`[BiometricService] Bulk pushing ${employeesToPush.length} employees to device ${serialNumber}`);
+  
+  const result = await adapter.pushMultipleEmployees(employeesToPush, serialNumber);
+  
+  // Save command
+  const command = await BiometricCommand.create({
+    ...scopeFilter,
+    commandId: result.commandId || `bulk-${Date.now()}`,
+    commandType: 'BULK_PUSH',
+    deviceSerialNumber: serialNumber,
+    status: result.success ? 'PENDING' : 'FAILED',
+    requestData: { employees: employeesToPush.length },
+    createdBy: user.userId
+  });
+  
+  return {
+    success: result.success,
+    message: result.success ? `Bulk push initiated for ${employees.length} employees` : result.error,
+    pushed: employees.length,
+    total: employees.length,
+    commandId: command.commandId,
+    employees: updates.map(u => ({
+      _id: u.employee._id,
+      name: u.employee.name,
+      employeeId: u.employee.employeeId,
+      biometricCode: u.biometricCode
+    }))
+  };
+};
+
+// ─── SYNC ALL DEVICES ────────────────────────────────────────────────────
+// Sync attendance from all active devices in parallel
+exports.syncAllDevices = async (configId, dateRange, user) => {
+  const scopeFilter = buildScopeFilter(user);
+  
+  const config = await BiometricConfig.findOne({
+    _id: configId,
+    ...scopeFilter,
+    isDeleted: false
+  });
+  
+  if (!config) {
+    throw new AppError('Biometric config not found', 404);
+  }
+  
+  const activeDevices = config.devices.filter(d => d.isActive);
+  
+  if (activeDevices.length === 0) {
+    return {
+      success: true,
+      message: 'No active devices to sync',
+      synced: 0,
+      failed: 0,
+      results: []
+    };
+  }
+  
+  console.log(`[BiometricService] Syncing ${activeDevices.length} devices in parallel`);
+  
+  // Sync all devices in parallel
+  const syncPromises = activeDevices.map(async (device) => {
+    try {
+      const result = await exports.pullAttendanceFromDevice(
+        configId,
+        device.serialNumber,
+        dateRange,
+        user
+      );
+      
+      return {
+        device: device.serialNumber,
+        success: result.success,
+        recordsCreated: result.recordsCreated || 0,
+        recordsMatched: result.recordsMatched || 0,
+        error: null
+      };
+    } catch (error) {
+      console.error(`[BiometricService] Sync failed for device ${device.serialNumber}:`, error);
+      return {
+        device: device.serialNumber,
+        success: false,
+        recordsCreated: 0,
+        recordsMatched: 0,
+        error: error.message
+      };
+    }
+  });
+  
+  const results = await Promise.all(syncPromises);
+  
+  const synced = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+  const totalCreated = results.reduce((sum, r) => sum + r.recordsCreated, 0);
+  const totalMatched = results.reduce((sum, r) => sum + r.recordsMatched, 0);
+  
+  return {
+    success: true,
+    message: `Synced ${synced}/${activeDevices.length} devices`,
+    synced,
+    failed,
+    totalCreated,
+    totalMatched,
+    results
+  };
+};
+
+ 

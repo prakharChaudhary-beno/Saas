@@ -143,3 +143,47 @@ exports.getSummary = Joi.object({
 
   employeeId: objectId.optional(),
 });
+
+// ─── POST /attendance/admin/punch-in (HR + Biometric Sync) ───────────────
+exports.adminPunchIn = Joi.object({
+  employeeId: objectId.required()
+    .messages({ "any.required": "employeeId is required" }),
+  
+  punchTime: Joi.date()
+    .iso()
+    .optional()
+    .messages({ "date.format": "punchTime must be ISO format" }),
+  
+  punchSource: Joi.string()
+    .valid('BIOMETRIC_SYNC', 'MANUAL_SYNC', 'ADMIN_PUNCH')
+    .optional()
+    .default('BIOMETRIC_SYNC'),
+  
+  remarks: Joi.string()
+    .trim()
+    .max(500)
+    .optional()
+    .allow("", null),
+});
+
+// ─── POST /attendance/admin/punch-out (HR + Biometric Sync) ───────────────
+exports.adminPunchOut = Joi.object({
+  employeeId: objectId.required()
+    .messages({ "any.required": "employeeId is required" }),
+  
+  punchTime: Joi.date()
+    .iso()
+    .optional()
+    .messages({ "date.format": "punchTime must be ISO format" }),
+  
+  punchSource: Joi.string()
+    .valid('BIOMETRIC_SYNC', 'MANUAL_SYNC', 'ADMIN_PUNCH')
+    .optional()
+    .default('BIOMETRIC_SYNC'),
+  
+  remarks: Joi.string()
+    .trim()
+    .max(500)
+    .optional()
+    .allow("", null),
+});

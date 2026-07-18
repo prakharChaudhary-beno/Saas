@@ -40,6 +40,42 @@ exports.punchOut = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POST /hrms/attendance/admin/punch-in (HR + Biometric Sync)
+// Punch-in on behalf of an employee (for biometric sync)
+// ─────────────────────────────────────────────────────────────────────────────
+exports.adminPunchIn = async (req, res, next) => {
+  try {
+    const result = await attendanceService.adminPunchIn(req.body, req.user)
+    
+    return res.status(201).json({
+      success: true,
+      message: result.alreadyPunchedIn ? result.message : 'Punch-in recorded successfully',
+      data: result
+    })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /hrms/attendance/admin/punch-out (HR + Biometric Sync)
+// Punch-out on behalf of an employee (for biometric sync)
+// ─────────────────────────────────────────────────────────────────────────────
+exports.adminPunchOut = async (req, res, next) => {
+  try {
+    const result = await attendanceService.adminPunchOut(req.body, req.user)
+    
+    return res.status(200).json({
+      success: true,
+      message: result.alreadyCompleted ? result.message : 'Punch-out recorded successfully',
+      data: result
+    })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /hrms/me/attendance?month=YYYY-MM
 // Employee apna monthly attendance detail dekhta hai
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +174,42 @@ exports.getAllAttendance = async (req, res, next) => {
     next(err);
   }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /hrms/attendance/admin/punch-in (HR + Biometric Sync)
+// Punch-in on behalf of an employee (for biometric sync)
+// ─────────────────────────────────────────────────────────────────────────────
+exports.adminPunchIn = async (req, res, next) => {
+  try {
+    const result = await attendanceService.adminPunchIn(req.body, req.user)
+    
+    return res.status(201).json({
+      success: true,
+      message: result.alreadyPunchedIn ? result.message : 'Punch-in recorded successfully',
+      data: result
+    })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /hrms/attendance/admin/punch-out (HR + Biometric Sync)
+// Punch-out on behalf of an employee (for biometric sync)
+// ─────────────────────────────────────────────────────────────────────────────
+exports.adminPunchOut = async (req, res, next) => {
+  try {
+    const result = await attendanceService.adminPunchOut(req.body, req.user)
+    
+    return res.status(200).json({
+      success: true,
+      message: result.alreadyCompleted ? result.message : 'Punch-out recorded successfully',
+      data: result
+    })
+  } catch (err) {
+    next(err)
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /hrms/attendance/:id/regularize  (HR only)

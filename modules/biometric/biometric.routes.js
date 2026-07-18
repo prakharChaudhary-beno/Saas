@@ -181,6 +181,22 @@ router.get(
   controller.pollCommandStatus
 );
 
+// POST /api/v1/biometric/config/:configId/devices/:serialNumber/bulk-push
+// Bulk push all active employees without biometricCode
+router.post(
+  '/config/:configId/devices/:serialNumber/bulk-push',
+  checkPermission('biometric.update'),
+  controller.bulkPushEmployees
+);
+
+// POST /api/v1/biometric/config/:configId/sync-all
+// Sync attendance from all active devices in parallel
+router.post(
+  '/config/:configId/sync-all',
+  checkPermission('biometric.update'),
+  controller.syncAllDevices
+);
+
 // ══════════════════════════════════════════════════════════════════════════
 // MAPPING ROUTES
 // ══════════════════════════════════════════════════════════════════════════
@@ -215,6 +231,38 @@ router.delete(
   '/mappings/:mappingId',
   checkPermission('biometric.delete'),
   controller.deleteMapping
+);
+
+// ══════════════════════════════════════════════════════════════════════════
+// ASSIGN BIOMETRIC CODE ROUTES
+// ══════════════════════════════════════════════════════════════════════════
+
+// POST /api/v1/biometric/employees/:employeeId/assign-code
+// Assign existing biometric code from device to employee
+router.post(
+  '/employees/:employeeId/assign-code',
+  checkPermission('biometric.update'),
+  controller.assignBiometricCode
+);
+
+// GET /api/v1/biometric/units/:unitId/employees/without-code
+// Get employees without biometric code
+router.get(
+  '/units/:unitId/employees/without-code',
+  checkPermission('biometric.read'),
+  controller.getEmployeesWithoutCode
+);
+
+// ══════════════════════════════════════════════════════════════════════════
+// PAGINATION ROUTES
+// ══════════════════════════════════════════════════════════════════════════
+
+// GET /api/v1/biometric/sync-logs/:syncLogId/records
+// Paginated matched/unmatched records from sync log
+router.get(
+  '/sync-logs/:syncLogId/records',
+  checkPermission('biometric.read'),
+  controller.getSyncLogRecords
 );
 
 module.exports = router;

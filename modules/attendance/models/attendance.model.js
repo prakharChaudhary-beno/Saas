@@ -389,7 +389,7 @@ attendanceSchema.pre("save", function (next) {
   //   this.date = d;
   // }
 
-  next();
+  // next();
 });
 
 // ─── Query Middleware: Soft delete filter ─────────────────────────────────────

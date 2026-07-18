@@ -507,6 +507,18 @@ exports.activateLogin = async (id, payload, user) => {
   const employee = await Employee.findOne(filter);
   if (!employee) throw new AppError("Employee not found", 404);
 
+  // Block sending login credentials before the employee's official joining
+  // date — no point issuing access (or a temp-password email) to someone
+  // who hasn't started yet. HR should activate this again on/after the
+  // joining date instead.
+  if (employee.joiningDate && new Date(employee.joiningDate) > new Date()) {
+    const { formatDateOnly } = require("../../utils/timezone");
+    throw new AppError(
+      `Cannot activate login before joining date (${formatDateOnly(employee.joiningDate)}). Please activate on or after this date.`,
+      400
+    );
+  }
+
   const role = await Role.findOne({ _id: roleId, isDeleted: false });
   if (!role) throw new AppError("Role not found", 404);
 

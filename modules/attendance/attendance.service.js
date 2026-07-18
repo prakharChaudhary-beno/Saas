@@ -1157,3 +1157,361 @@ exports.getAllClockedIn = async (user) => {
     employees: result
   };
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN PUNCH-IN (Biometric Sync Helper)
+// POST /hrms/attendance/admin/punch-in
+// Called by biometric sync to punch-in on behalf of employee
+// ─────────────────────────────────────────────────────────────────────────────
+exports.adminPunchIn = async (data, user) => {
+  const { employeeId, punchTime, punchSource = 'BIOMETRIC_SYNC', remarks } = data
+  
+  if (!employeeId) {
+    throw new AppError('employeeId is required', 400)
+  }
+  
+  // Parse punch time or use current time
+  const punchDate = punchTime ? new Date(punchTime) : new Date()
+  
+  // ── 0. Fetch CompanyConfig for timezone ───────────────────────
+  const companyConfig = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId })
+    .select('timezone overtimeThresholdHours overtimeEnabled halfDayThresholdHours')
+    .lean()
+  
+  const timezone = companyConfig?.timezone || 'Asia/Kolkata'
+  
+  // ── 1. Get employee by ID (not from user token) ────────────────
+  const employee = await Employee.findOne({
+    _id: employeeId,
+    org_id: user.orgId,
+    company_id: user.companyId,
+    isDeleted: false
+  }).populate('unit_id', 'name geolocation locationSettings')
+  
+  if (!employee) {
+    throw new AppError(`Employee not found: ${employeeId}`, 404)
+  }
+  
+  // Use employee's unit
+  const unitId = employee.unit_id?._id || employee.unit_id
+  const unit = employee.unit_id
+  
+  // ── 2. Get date based on punch time (org timezone midnight) ────
+  const orgPunchTime = new Date(punchDate.toLocaleString('en-US', { timeZone: timezone }))
+  const today = new Date(orgPunchTime)
+  today.setUTCHours(0, 0, 0, 0)
+  
+  // ── 3. Use unit location for biometric punches ──────────────────
+  let capturedLocation = null
+  if (unit?.geolocation?.latitude && unit?.geolocation?.longitude) {
+    capturedLocation = {
+      latitude: unit.geolocation.latitude,
+      longitude: unit.geolocation.longitude,
+      accuracy: unit.geolocation.radiusMeters || 200,
+      source: 'unit_default',
+      message: `Biometric sync - using unit "${unit.name}" location`
+    }
+  }
+  
+  // ── 4. Check existing attendance ───────────────────────────────
+  const existing = await Attendance.findOne({
+    org_id: user.orgId,
+    company_id: user.companyId,
+    employeeId: employee._id,
+    date: today
+  })
+  
+  if (existing?.checkIn && !existing.checkOut) {
+    // Already punched in, update punch-out instead
+    return {
+      alreadyPunchedIn: true,
+      record: existing,
+      message: `Employee already punched in at ${existing.checkIn}`
+    }
+  }
+  
+  if (existing?.checkIn && existing?.checkOut) {
+    // Already completed, skip
+    return {
+      alreadyCompleted: true,
+      record: existing,
+      message: 'Attendance already completed for this date'
+    }
+  }
+  
+  // ── 5. Employee active check ──────────────────────────────────
+  if (employee.status !== 'ACTIVE') {
+    throw new AppError(`Cannot punch-in for inactive employee (status: ${employee.status})`, 403)
+  }
+  
+  // ── 6. Holiday & Leave check ────────────────────────────────
+  const holiday = await Holiday.findOne({
+    org_id: user.orgId,
+    company_id: user.companyId,
+    date: { $gte: today, $lt: new Date(today.getTime() + 86400000) },
+    isDeleted: false
+  }).select('name type').lean()
+  
+  const approvedLeave = await LeaveRequest.findOne({
+    employeeId: employee._id,
+    status: 'APPROVED',
+    startDate: { $lte: today },
+    endDate: { $gte: today }
+  }).select('leaveTypeId').lean()
+  
+  // ── 7. Resolve shift dynamically ─────────────────────────────
+  let shiftStart = '09:00'
+  let shiftEnd = '18:00'
+  let isNextDay = false
+  let graceMinutes = 15
+  let standardHours = 8
+  let halfDayThreshold = 4
+  let shiftId = null
+  let shiftSource = 'policy_default'
+  let resolvedShiftId = null
+  let resolvedRosterId = null
+  
+  try {
+    const shiftResult = await resolveShiftForEmployee(
+      employee._id,
+      unitId,
+      user.orgId,
+      user.companyId,
+      today
+    )
+    
+    if (shiftResult?.shift) {
+      const s = shiftResult.shift
+      shiftStart = s.startTime
+      shiftEnd = s.endTime
+      isNextDay = s.isNextDay ?? false
+      graceMinutes = s.gracePeriodMinutes ?? 15
+      standardHours = (s.workingMinutes ?? 480) / 60
+      halfDayThreshold = (s.halfDayThresholdMinutes ?? 240) / 60
+      shiftId = s._id
+      shiftSource = shiftResult.source
+      resolvedShiftId = s._id
+      resolvedRosterId = shiftResult.roster_id || null
+    }
+  } catch (_) {
+    // Fall through to policy
+  }
+  
+  // AttendancePolicy fallback
+  const attendancePolicy = await resolveAttendancePolicy(
+    employee._id.toString(),
+    user.companyId.toString(),
+    unitId ? unitId.toString() : null
+  )
+  
+  if (shiftSource === 'policy_default' && attendancePolicy) {
+    shiftStart = attendancePolicy.shift?.start ?? '09:00'
+    shiftEnd = attendancePolicy.shift?.end ?? '18:00'
+    isNextDay = attendancePolicy.shift?.isNextDay ?? false
+    graceMinutes = attendancePolicy.shift?.graceMinutes ?? 15
+    standardHours = attendancePolicy.shift?.minimumHours ?? 8
+    halfDayThreshold = attendancePolicy.shift?.halfDayMinHours ?? 4
+    shiftSource = 'policy'
+  }
+  
+  const overtimeThreshold = companyConfig?.overtimeThresholdHours ?? 0
+  
+  // ── 8. Determine late status ──────────────────────────────────
+  const punchInStatus = getPunchInStatus(punchDate, shiftStart, graceMinutes, timezone)
+  const isLate = punchInStatus === 'LATE'
+  const lateMinutes = isLate ? Math.ceil((punchDate - new Date(punchDate.toDateString() + ' ' + shiftStart.replace('24:', '00:'))) / (1000 * 60)) : 0
+  
+  // ── 9. Determine status ──────────────────────────────────────
+  let status = 'PRESENT'
+  if (holiday) status = 'HOLIDAY'
+  else if (approvedLeave) status = 'ON_LEAVE'
+  else if (isLate) status = 'LATE'
+  
+  // ── 10. Create attendance record ─────────────────────────────
+  const record = await Attendance.findOneAndUpdate(
+    {
+      org_id: user.orgId,
+      company_id: user.companyId,
+      unit_id: unitId,
+      employeeId: employee._id,
+      date: today
+    },
+    {
+      $setOnInsert: {
+        org_id: user.orgId,
+        company_id: user.companyId,
+        unit_id: unitId,
+        employeeId: employee._id,
+        userId: employee.userId,
+        date: today,
+        standardHours,
+        shiftStart,
+        shiftEnd,
+        graceMinutes,
+        isNextDay,
+        shiftId: resolvedShiftId || null,
+        rosterId: resolvedRosterId || null,
+        shiftSource,
+        halfDayThreshold,
+        overtimeThreshold,
+        createdBy: user.userId
+      },
+      $set: {
+        checkIn: punchDate,
+        status,
+        isLate,
+        lateMinutes,
+        punchSource,
+        remarks: remarks || `Biometric sync - ${punchSource}`,
+        updatedBy: user.userId,
+        ...(capturedLocation && {
+          checkInLocation: {
+            latitude: capturedLocation.latitude,
+            longitude: capturedLocation.longitude,
+            accuracy: capturedLocation.accuracy,
+            timestamp: punchDate,
+            isValid: true,
+            source: capturedLocation.source,
+            message: capturedLocation.message
+          }
+        })
+      }
+    },
+    { upsert: true, new: true }
+  )
+  
+  return { created: true, record }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN PUNCH-OUT (Biometric Sync Helper)
+// POST /hrms/attendance/admin/punch-out
+// Called by biometric sync to punch-out on behalf of employee
+// ─────────────────────────────────────────────────────────────────────────────
+exports.adminPunchOut = async (data, user) => {
+  const { employeeId, punchTime, punchSource = 'BIOMETRIC_SYNC', remarks } = data
+  
+  if (!employeeId) {
+    throw new AppError('employeeId is required', 400)
+  }
+  
+  const punchDate = punchTime ? new Date(punchTime) : new Date()
+  
+  // ── 0. Fetch CompanyConfig for timezone ───────────────────────
+  const companyConfig = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId })
+    .select('timezone overtimeThresholdHours overtimeEnabled halfDayThresholdHours')
+    .lean()
+  
+  const timezone = companyConfig?.timezone || 'Asia/Kolkata'
+  
+  // ── 1. Get employee ──────────────────────────────────────────
+  const employee = await Employee.findOne({
+    _id: employeeId,
+    org_id: user.orgId,
+    company_id: user.companyId,
+    isDeleted: false
+  }).populate('unit_id', 'name geolocation')
+  
+  if (!employee) {
+    throw new AppError(`Employee not found: ${employeeId}`, 404)
+  }
+  
+  const unitId = employee.unit_id?._id || employee.unit_id
+  const unit = employee.unit_id
+  
+  // ── 2. Get date based on punch time ───────────────────────────
+  const orgPunchTime = new Date(punchDate.toLocaleString('en-US', { timeZone: timezone }))
+  const today = new Date(orgPunchTime)
+  today.setUTCHours(0, 0, 0, 0)
+  
+  // ── 3. Find attendance record ────────────────────────────────
+  const record = await Attendance.findOne({
+    org_id: user.orgId,
+    company_id: user.companyId,
+    employeeId: employee._id,
+    date: today
+  })
+  
+  // ── 4. Validation ────────────────────────────────────────────
+  if (!record || !record.checkIn) {
+    // No existing punch-in - can't punch out without punch-in
+    throw new AppError('No punch-in found for this date. Punch-in first.', 400)
+  }
+  
+  if (record.checkOut) {
+    return {
+      alreadyCompleted: true,
+      record,
+      message: 'Already punched out for this date'
+    }
+  }
+  
+  // ── 5. Punch-out can't be before punch-in ────────────────────
+  if (punchDate < record.checkIn) {
+    throw new AppError('Punch-out time cannot be before punch-in time', 400)
+  }
+  
+  // ── 6. Calculate working hours ───────────────────────────────
+  const workingHours = calculateWorkingHours(record.checkIn, punchDate, timezone)
+  
+  let overtimeHours = 0
+  if (companyConfig?.overtimeEnabled) {
+    overtimeHours = calculateOvertime(
+      punchDate,
+      record.shiftEnd,
+      record.isNextDay,
+      record.date,
+      timezone,
+      record.overtimeThreshold || 0
+    )
+  }
+  
+  // ── 7. Use unit location ─────────────────────────────────────
+  let capturedLocation = null
+  if (unit?.geolocation?.latitude && unit?.geolocation?.longitude) {
+    capturedLocation = {
+      latitude: unit.geolocation.latitude,
+      longitude: unit.geolocation.longitude,
+      accuracy: unit.geolocation.radiusMeters || 200,
+      source: 'unit_default',
+      message: `Biometric sync - using unit "${unit.name}" location`
+    }
+  }
+  
+  // ── 8. Update attendance ──────────────────────────────────────
+  record.checkOut = punchDate
+  record.workingHours = workingHours
+  record.overtimeHours = overtimeHours
+  record.punchSource = punchSource
+  record.updatedBy = user.userId
+  if (remarks) record.remarks = remarks
+  
+  // Update status based on working hours
+  const halfDayMin = record.halfDayThreshold || 4
+  const fullDayMin = record.standardHours || 8
+  
+  if (['PRESENT', 'WFH', 'LATE'].includes(record.status)) {
+    if (workingHours < halfDayMin) {
+      record.status = 'ABSENT'
+    } else if (workingHours >= halfDayMin && workingHours < fullDayMin) {
+      record.status = 'HALF_DAY'
+    }
+  }
+  
+  // Add check-out location
+  if (capturedLocation) {
+    record.checkOutLocation = {
+      latitude: capturedLocation.latitude,
+      longitude: capturedLocation.longitude,
+      accuracy: capturedLocation.accuracy,
+      timestamp: punchDate,
+      isValid: true,
+      source: capturedLocation.source,
+      message: capturedLocation.message
+    }
+  }
+  
+  await record.save()
+  
+  return { updated: true, record }
+}

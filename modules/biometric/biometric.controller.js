@@ -426,3 +426,139 @@ exports.deleteMapping = async (req, res, next) => {
     next(err);
   }
 };
+
+// ─── ASSIGN BIOMETRIC CODE ENDPOINTS ──────────────────────────────────────
+
+// POST /api/v1/biometric/employees/:employeeId/assign-code
+// Assign existing biometric code from device to an employee
+exports.assignBiometricCode = async (req, res, next) => {
+  try {
+    const { biometricCode } = req.body;
+    
+    if (!biometricCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'biometricCode is required'
+      });
+    }
+    
+    const employee = await biometricService.assignBiometricCode(
+      req.params.employeeId,
+      biometricCode,
+      req.user
+    );
+    
+    res.status(200).json({
+      success: true,
+      message: `Biometric code ${biometricCode} assigned to ${employee.name}`,
+      data: employee
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/v1/biometric/units/:unitId/employees/without-code
+// Get employees without biometric code for dropdown
+exports.getEmployeesWithoutCode = async (req, res, next) => {
+  try {
+    const employees = await biometricService.getEmployeesWithoutBiometricCode(
+      req.params.unitId,
+      req.user
+    );
+    
+    res.status(200).json({
+      success: true,
+      count: employees.length,
+      data: employees
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/v1/biometric/config/:configId/devices/:serialNumber/bulk-push
+// Bulk push all active employees without biometricCode
+exports.bulkPushEmployees = async (req, res, next) => {
+  try {
+    const result = await biometricService.bulkPushEmployees(
+      req.params.configId,
+      req.params.serialNumber,
+      req.user
+    );
+    
+    res.status(200).json({
+      success: result.success,
+      message: result.message,
+      data: {
+        pushed: result.pushed,
+        total: result.total,
+        commandId: result.commandId,
+        employees: result.employees
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/v1/biometric/config/:configId/sync-all
+// Sync attendance from all active devices
+exports.syncAllDevices = async (req, res, next) => {
+  try {
+    const result = await biometricService.syncAllDevices(
+      req.params.configId,
+      {
+        startTime: req.body.startTime ? new Date(req.body.startTime) : undefined,
+        endTime: req.body.endTime ? new Date(req.body.endTime) : undefined
+      },
+      req.user
+    );
+    
+    res.status(200).json({
+      success: result.success,
+      message: result.message,
+      data: {
+        synced: result.synced,
+        failed: result.failed,
+        totalCreated: result.totalCreated,
+        totalMatched: result.totalMatched,
+        results: result.results
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PAGINATION ENDPOINTS ──────────────────────────────────────────────────
+
+// GET /api/v1/biometric/sync-logs/:syncLogId/records
+// Paginated records (matched or unmatched) from a sync log
+exports.getSyncLogRecords = async (req, res, next) => {
+  try {
+    const { type = 'matched', page = 1, limit = 20 } = req.query;
+    
+    const result = await biometricService.getSyncLogRecords(
+      req.params.syncLogId,
+      type,
+      parseInt(page),
+      parseInt(limit),
+      req.user
+    );
+    
+    res.status(200).json({
+      success: true,
+      pagination: {
+        page: result.page,
+        totalPages: result.totalPages,
+        total: result.total,
+        hasNext: result.page < result.totalPages,
+        hasPrev: result.page > 1
+      },
+      data: result.records
+    });
+  } catch (err) {
+    next(err);
+  }
+};

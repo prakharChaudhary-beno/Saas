@@ -358,15 +358,16 @@ attendanceSchema.virtual("isPunchedIn").get(function () {
 });
 
 // ─── Pre-save Hook: Calculate workingHours, overtimeHours ─────────────────────
+// Mongoose 9.x: Use async function without next parameter
 
-attendanceSchema.pre("save", function (next) {
+attendanceSchema.pre("save", async function () {
   // workingHours already calculated in service layer (timezone-aware)
   // This hook only validates the data
   if (this.checkIn && this.checkOut) {
     const diffMs = this.checkOut - this.checkIn;
 
     if (diffMs < 0) {
-      return next(new Error("Check-out time cannot be before check-in time"));
+      throw new Error("Check-out time cannot be before check-in time");
     }
 
     // If workingHours not set, calculate (fallback)
@@ -388,8 +389,6 @@ attendanceSchema.pre("save", function (next) {
     d.setUTCHours(0, 0, 0, 0);
     this.date = d;
   }
-
-  next();
 });
 
 // ─── Query Middleware: Soft delete filter ─────────────────────────────────────

@@ -93,6 +93,27 @@ router.post(
 );
 
 // ─────────────────────────────────────────────────────────────
+// ADMIN PUNCH-IN/OUT (HR + Biometric Sync)
+// Requires attendance.update permission (HR/Unit Admin level)
+// ─────────────────────────────────────────────────────────────
+
+// POST /hrms/attendance/admin/punch-in — punch-in on behalf of employee
+router.post(
+  "/admin/punch-in",
+  checkPermission("attendance.update"),
+  validate(attendanceValidation.adminPunchIn),
+  attendanceController.adminPunchIn
+);
+
+// POST /hrms/attendance/admin/punch-out — punch-out on behalf of employee
+router.post(
+  "/admin/punch-out",
+  checkPermission("attendance.update"),
+  validate(attendanceValidation.adminPunchOut),
+  attendanceController.adminPunchOut
+);
+
+// ─────────────────────────────────────────────────────────────
 // MANAGER routes (Team Attendance)
 // ─────────────────────────────────────────────────────────────
 

@@ -191,7 +191,9 @@ module.exports = (requiredPermission) => {
       console.log(`[DEBUG] Permission check for ${requiredPermission} | User: ${req.user.userId} | Role: ${role.slug} | Permissions: ${role.permissions.length}`);
 
       // Wildcard — full access (org_admin etc.)
-      if (role.permissions.some(p => (p.slug || p.toString()) === "*")) return next();
+      if (role.permissions.some(p => (p.slug || p.toString()) === "*")) {
+        return next();
+      }
 
       // Slug-based lookup (fast, indexed)
       let permission = await Permission.findOne({ slug: requiredPermission, is_active: true });

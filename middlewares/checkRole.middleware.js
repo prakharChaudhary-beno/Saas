@@ -92,7 +92,7 @@ exports.requireTenantUser = (req, res, next) => {
   if (!req.user?.orgId) {
     return next(new AppError("Organisation context missing", 403));
   }
-  next();
+  return next();
 };
 
 // ─────────────────────────────────────────────────────────────

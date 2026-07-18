@@ -152,12 +152,12 @@ biometricCommandSchema.virtual('elapsedMinutes').get(function() {
 });
 
 // ─── Pre-Save Hook: Auto-increment attempts ────────────────────────────
-biometricCommandSchema.pre('save', function(next) {
+// Mongoose 9.x: Use async function without next parameter
+biometricCommandSchema.pre('save', async function() {
   if (this.isModified('status') && this.status !== 'PENDING') {
     this.resolvedAt = new Date();
   }
-  // updatedAt is handled by timestamps option, no need to set manually
-  next();
+  // updatedAt is handled by timestamps option
 });
 
 // ─── Instance Method: Mark Success ────────────────────────────────────

@@ -170,14 +170,15 @@ biometricSyncLogSchema.virtual('successRate').get(function() {
 });
 
 // ─── Pre-Save Hook ────────────────────────────────────────────────────
-biometricSyncLogSchema.pre('save', function(next) {
+// Mongoose 9.x: Use async function without next parameter
+biometricSyncLogSchema.pre('save', async function() {
   // Calculate response time if completed
   if (this.completedAt && this.startedAt) {
     this.responseTimeMs = this.completedAt.getTime() - this.startedAt.getTime();
   }
   
   // Update status based on results
-  if (this.status === 'RUNNING') return next();
+  if (this.status === 'RUNNING') return;
   
   if (this.recordsFetched === 0 && !this.errorMessage) {
     this.status = 'SUCCESS'; // Empty sync is still success
@@ -188,8 +189,6 @@ biometricSyncLogSchema.pre('save', function(next) {
   } else if (this.errorMessage) {
     this.status = 'FAILED';
   }
-  
-  next();
 });
 
 // ─── Instance Method: Complete Log ───────────────────────────────────

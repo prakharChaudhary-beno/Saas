@@ -130,12 +130,12 @@ biometricMappingSchema.virtual('employee', {
 });
 
 // ─── Pre-Save Hook ───────────────────────────────────────────────────
-biometricMappingSchema.pre('save', function(next) {
+// Mongoose 9.x: Use async function without next parameter
+biometricMappingSchema.pre('save', async function() {
   // If verified, update status to ACTIVE
   if (this.isVerified && this.status === 'PENDING') {
     this.status = 'ACTIVE';
   }
-  next();
 });
 
 // ─── Instance Method: Verify Mapping ─────────────────────────────────

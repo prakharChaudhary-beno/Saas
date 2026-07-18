@@ -237,7 +237,8 @@ about: {
 }, { timestamps: true });
 
 // ─── Indexes ──────────────────────────────────────────
-employeeSchema.index({ org_id: 1, company_id: 1, employeeId: 1 }, { unique: true });
+// EmployeeId must be unique within org + company + unit scope
+employeeSchema.index({ org_id: 1, company_id: 1, unit_id: 1, employeeId: 1 }, { unique: true });
 employeeSchema.index({ org_id: 1, company_id: 1, email: 1 },      { unique: true });
 employeeSchema.index({ org_id: 1, company_id: 1, status: 1 });
 employeeSchema.index({ unit_id: 1, isDeleted: 1 });

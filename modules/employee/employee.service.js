@@ -24,6 +24,14 @@ const Subscription = require("../subscription/models/subscription.Models"); // T
 const auditService = require("../auditLogs/auditLog.service");
 const Roster        = require("../shift/models/roster.model"); // CRITICAL: import Roster for cascade delete
 
+// ─── Helper — normalize phone number ──────────────────────────
+// Removes +91 prefix, removes leading 0, keeps only 10 digits
+const normalizePhoneNumber = (phone) => {
+  if (!phone) return phone;
+  // Remove +91 prefix with optional space, remove leading 0
+  return phone.replace(/^\+91\s?|^0/g, '').trim();
+};
+
 // ─── Build scope filter from req.user ─────────────────────────
 // Org Admin sees all employees in org
 // Company Admin sees all employees in company
@@ -150,10 +158,14 @@ exports.createEmployee = async (payload, user) => {
   const employeeId = await generateEmployeeId(user.orgId, user.companyId);
 
   // Salary calculate
-  const calculatedSalary = calculateSalary(salary);
+  const calculatedSalary = salary ? calculateSalary(salary) : undefined;
+
+  // Normalize phone number - extract +91 if present
+  let normalizedPhone = payload.phone ? normalizePhoneNumber(payload.phone) : payload.phone;
 
   const employee = await Employee.create({
     ...payload,
+    phone: normalizedPhone,
     employeeId,
     salary:     calculatedSalary,
     org_id:     user.orgId,
@@ -323,6 +335,10 @@ exports.updateEmployee = async (id, data, user) => {
     "documents"
   ];
 
+  // Admin/HR can update these additional fields
+  const ADMIN_HR_EDITABLE_FIELDS = ["name", "joiningDate", "employmentType", "departmentId"];
+  const CAN_EDIT_EMPLOYEE_DETAILS = ['SUPER_ADMIN', 'org_admin', 'company_admin', 'unit_admin', 'hr_manager', 'company_hr_manager', 'admin', 'hr'];
+
   // ─── Salary Update Permission Check ─────────────────────────────────
   // Only Admin/HR can update salary/bankDetails
   const CAN_EDIT_SALARY = ['SUPER_ADMIN', 'org_admin', 'company_admin', 'unit_admin', 'hr_manager', 'company_hr_manager'];
@@ -333,6 +349,15 @@ exports.updateEmployee = async (id, data, user) => {
     delete data.bankDetails;
     // Log attempt but don't throw - just ignore
     console.log(`User ${user.userId} (${user.role}) attempted to update salary - permission denied`);
+  }
+
+  // Admin/HR can update name, joiningDate, employmentType - remove from restricted list
+  if (CAN_EDIT_EMPLOYEE_DETAILS.includes(user.role)) {
+    // These fields are allowed, so remove them from restrictions
+    ADMIN_HR_EDITABLE_FIELDS.forEach(f => {
+      const idx = EMPLOYEE_RESTRICTED_FIELDS.indexOf(f);
+      if (idx > -1) EMPLOYEE_RESTRICTED_FIELDS.splice(idx, 1);
+    });
   }
 
   if (user.role === "employee") {
@@ -422,6 +447,11 @@ exports.updateEmployee = async (id, data, user) => {
   // Salary recalculate
   if (data.salary) {
     data.salary = calculateSalary({ ...employee.salary.toObject(), ...data.salary });
+  }
+
+  // Normalize phone number - extract +91 if present
+  if (data.phone) {
+    data.phone = normalizePhoneNumber(data.phone);
   }
 
   // Build diff for audit log (salary changes)

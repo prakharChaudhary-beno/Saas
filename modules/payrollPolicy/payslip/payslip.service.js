@@ -11,6 +11,7 @@ const User      = require("../../auth/models/user.model");
 const AppError  = require("../../../utils/appError");
 const { sendEmail }                = require("../../../utils/email/email");
 const { payslipPublishedTemplate } = require("../../../utils/email/templates/payslipEmail");
+const lockService = require("../payrollLock.service"); // Import lock service
 
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
@@ -204,6 +205,20 @@ exports.publishPayslip = async (id, user) => {
 
   if (!payslip) throw new AppError("Payslip not found", 404);
 
+  // ── MANDATORY: Check payroll period lock before publishing ───
+  const isLocked = await lockService.isPeriodLocked(
+    payslip.month,
+    payslip.year,
+    payslip.org_id || user.orgId,
+    payslip.unit_id
+  );
+  if (isLocked) {
+    throw new AppError(
+      `Cannot publish payslip: Payroll period ${payslip.month}/${payslip.year} is locked. Please unlock the period first.`,
+      423
+    );
+  }
+
   // Scope check
   if (user.companyId && String(payslip.company_id) !== String(user.companyId)) {
     throw new AppError("Access denied", 403);
@@ -302,6 +317,20 @@ exports.publishPayslip = async (id, user) => {
 exports.publishAllPayslips = async (body, user) => {
   const { month, year } = body;
   if (!month || !year) throw new AppError("month and year required", 400);
+
+  // ── MANDATORY: Check payroll period lock before bulk publishing ───
+  const isLocked = await lockService.isPeriodLocked(
+    Number(month),
+    Number(year),
+    user.orgId,
+    user.unitId
+  );
+  if (isLocked) {
+    throw new AppError(
+      `Cannot publish payslips: Payroll period ${month}/${year} is locked. Please unlock the period first.`,
+      423
+    );
+  }
 
   const filter = {
     company_id: toObjId(user.companyId),

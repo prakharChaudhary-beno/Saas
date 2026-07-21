@@ -217,9 +217,18 @@ exports.deleteEmployeeFromDevice = async (req, res, next) => {
 // POST /api/v1/biometric/config/:configId/devices/:serialNumber/sync
 exports.pullAttendanceFromDevice = async (req, res, next) => {
   try {
+    // Guard: Validate serialNumber parameter
+    const { serialNumber } = req.params;
+    if (!serialNumber || typeof serialNumber !== 'string' || serialNumber.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Device serial number is required'
+      });
+    }
+    
     const result = await biometricService.pullAttendanceFromDevice(
       req.params.configId,
-      req.params.serialNumber,
+      serialNumber.trim(),
       {
         startTime: req.body.startTime ? new Date(req.body.startTime) : undefined,
         endTime:   req.body.endTime ? new Date(req.body.endTime) : undefined,

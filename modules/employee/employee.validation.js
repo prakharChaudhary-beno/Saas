@@ -25,10 +25,9 @@ exports.createEmployeeSchema = Joi.object({
     }),
 
   phone: Joi.string()
-    .pattern(/^[6-9]\d{9}$/)
-    .required()
+    .pattern(/^(\+91[\s]?|[0])?[6-9]\d{9}$/)
+    .optional()
     .messages({
-      "string.empty":   "Phone is required",
       "string.pattern.base": "Please provide a valid 10 digit phone number"
     }),
 
@@ -136,11 +135,10 @@ exports.createEmployeeSchema = Joi.object({
 
     basic: Joi.number()
       .min(0)
-      .required()
+      .optional()
       .messages({
         "number.base": "Basic salary must be a number",
-        "number.min":  "Basic salary cannot be negative",
-        "any.required": "Basic salary is required"
+        "number.min":  "Basic salary cannot be negative"
       }),
 
     hra:              Joi.number().min(0).default(0).optional(),
@@ -163,7 +161,7 @@ exports.createEmployeeSchema = Joi.object({
     currency:         Joi.string().default("INR").optional(),
     effectiveFrom:    Joi.date().optional()
 
-  }).required().messages({
+  }).optional().messages({
     "any.required": "Salary details are required"
   }),
 

@@ -15,6 +15,8 @@ const Employee           = require('../employee/models/employee.model');
 const Attendance         = require('../attendance/models/attendance.model');
 const AppError          = require('../../utils/appError');
 const { createAdapter } = require('./adapters/biometricAdapter.interface');
+const CompanyConfig      = require('../companyConfig/models/companyConfig.model');
+const moment             = require('moment-timezone');
 
 // ─── Build Scope Filter ───────────────────────────────────────────────
 const buildScopeFilter = (user) => {
@@ -827,8 +829,17 @@ const processPunchRecords = async (records, config, device, user) => {
 const updateAttendanceFromPunchWithTimes = async (employee, firstPunchTime, lastPunchTime, config, user) => {
   const checkInTime = new Date(firstPunchTime);
   const checkOutTime = new Date(lastPunchTime);
-  const startOfDay = new Date(checkInTime);
-  startOfDay.setUTCHours(0, 0, 0, 0);
+  
+  // CRITICAL: Use org timezone to match attendance query logic
+  // Attendance records use timezone-aware midnight for the 'date' field
+  const companyConfig = await CompanyConfig.findOne({ 
+    org_id: config.org_id, 
+    company_id: config.company_id 
+  }).select('timezone').lean();
+  const timezone = companyConfig?.timezone || 'Asia/Kolkata';
+  
+  // Use timezone-aware start of day (same as attendance service)
+  const startOfDay = moment(checkInTime).tz(timezone).startOf('day').toDate();
 
   // Find existing attendance for this employee on this date
   let attendance = await Attendance.findOne({

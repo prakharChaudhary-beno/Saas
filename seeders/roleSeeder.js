@@ -184,7 +184,7 @@ const readOnlySlugs = allSlugs.filter(
 "notification.read", "notification.update",
 "auditlog.read",
 "holiday.create", "holiday.update", "holiday.delete",
-"biometric.read", "biometric.create", "biometric.update", "biometric.delete",
+"biometric.read", "biometric.create", "biometric.update", "biometric.delete","investment_declaration.read", "investment_declaration.create", "investment_declaration.update", "investment_declaration.delete",  // Unit admin full access
         ]),
         isSystem: true,
         org_id: null,
@@ -208,6 +208,7 @@ const readOnlySlugs = allSlugs.filter(
           "designation.read",
           "holiday.read",
           "biometric.read", "biometric.create", "biometric.update",
+          "investment_declaration.read", "investment_declaration.create", "investment_declaration.update",  // HR can review and approve
         ]),
         isSystem:    true,
         org_id:      null,
@@ -250,6 +251,8 @@ const readOnlySlugs = allSlugs.filter(
           "attendance.create", "attendance.update", "attendance.read",  // Can punch in and out
           "leave.create", "leave.read",
           "payroll.read",
+          "investment_declaration.create", "investment_declaration.read",  // Can create and view own investment declarations
+          "biometric.read", "biometric.create",  // Can view and create biometric config
         ]),
         isSystem:    true,
         org_id:      null,

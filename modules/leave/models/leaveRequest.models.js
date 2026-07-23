@@ -193,7 +193,7 @@ leaveRequestSchema.pre("validate", function (next) {
   if (this.endDate < this.startDate) {
     return next(new Error("End date cannot be before start date"));
   }
-  next();
+  // next();
 });
 
 // ─── Query Middleware ──────────────────────────────────────

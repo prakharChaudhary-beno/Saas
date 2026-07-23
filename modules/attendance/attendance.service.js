@@ -905,7 +905,7 @@ const moment = require("moment-timezone");
 
   const [records, total] = await Promise.all([
     Attendance.find(filter)
-      .populate("employeeId", "name employeeId departmentId profilePhoto")
+      .populate("employeeId", "name employeeId email departmentId profilePhoto")
       .sort({ date: -1, createdAt: -1 })
       .skip(skip)
       .limit(Number(limit))
@@ -1000,7 +1000,7 @@ const moment = require("moment-timezone");
 
   const [records, total] = await Promise.all([
     Attendance.find(filter)
-      .populate("employeeId", "name employeeId departmentId profilePhoto")
+      .populate("employeeId", "name employeeId email departmentId profilePhoto")
       .sort({ date: -1, createdAt: -1 })
       .skip(skip)
       .limit(Number(limit))
@@ -1033,7 +1033,7 @@ const moment = require("moment-timezone");
           company_id: user.companyId,
           status: "ACTIVE",
           isDeleted: false,
-        }).select("_id name employeeId departmentId profilePhoto");
+        }).select("_id name employeeId email departmentId profilePhoto");
         
         // Find which employees already have attendance records
         const employeesWithRecords = new Set(records.map(r => r.employeeId?._id?.toString() || r.employeeId?.toString()));

@@ -300,15 +300,22 @@ exports.getUnits = async (reqUser, query = {}) => {
     org_id:     reqUser.orgId,
     unit_id:    { $in: unitIds },
     roleId:     unitAdminRole._id,
+    status:     "ACTIVE",
     is_deleted: false,
   }).select("name email unit_id status").lean() : [];
 
-  const adminMap = {};
-  admins.forEach(a => { adminMap[String(a.unit_id)] = a; });
+  // Multiple active admins per unit are allowed — group into an array
+  // instead of keeping only the last match.
+  const adminsByUnit = {};
+  admins.forEach(a => {
+    const key = String(a.unit_id);
+    if (!adminsByUnit[key]) adminsByUnit[key] = [];
+    adminsByUnit[key].push(a);
+  });
 
   const unitsWithAdmin = units.map(u => ({
     ...u,
-    admin: adminMap[String(u._id)] || null,
+    admins: adminsByUnit[String(u._id)] || [],
   }));
 
   return {

@@ -9,6 +9,7 @@ const checkPermission = require("../../middlewares/permission.middleware");
 const checkTrial = require("../../middlewares/checkTrial.middleware");
 const validate = require("../../middlewares/validate.middleware");
 const investmentDeclarationService = require("./investmentDeclaration.service");
+const { checkInvestmentEnabled } = require("./middlewares/checkInvestmentConfig");
 const Joi = require("joi");
 
 // ─── Validation Schemas ──────────────────────────────────────────────────────
@@ -65,6 +66,7 @@ router.use(authenticate, checkTrial);
 // ─── Employee Routes ──────────────────────────────────────────────────────────
 // Employee creates/updates their investment declaration
 router.post("/",
+  checkInvestmentEnabled,  // Check if investment declaration is enabled in payroll policy
   validate(upsertDeclarationSchema),
   async (req, res, next) => {
     try {
@@ -90,6 +92,7 @@ router.post("/",
 // Get employee's own declaration for a financial year
 // Handles /my?financialYear=2026-2027 (query param)
 router.get("/my", 
+  checkInvestmentEnabled,  // Check if investment declaration is enabled in payroll policy
   async (req, res, next) => {
     try {
       const employee = await getEmployeeFromUser(req.user);
@@ -121,6 +124,7 @@ router.get("/my",
 // Get employee's own declaration for a financial year (path param)
 // Handles /my/2026-2027
 router.get("/my/:financialYear", 
+  checkInvestmentEnabled,  // Check if investment declaration is enabled in payroll policy
   async (req, res, next) => {
     try {
       const employee = await getEmployeeFromUser(req.user);
@@ -143,6 +147,7 @@ router.get("/my/:financialYear",
 // Submit declaration for review (query param)
 // Handles /submit?financialYear=2026-2027
 router.post("/submit",
+  checkInvestmentEnabled,  // Check if investment declaration is enabled in payroll policy
   async (req, res, next) => {
     try {
       const employee = await getEmployeeFromUser(req.user);
@@ -226,6 +231,7 @@ router.post("/proof",
 // Get all declarations for review (HR view)
 router.get("/all",
   checkPermission("investment_declaration.read"),
+  checkInvestmentEnabled,  // Check if investment declaration is enabled in payroll policy
   async (req, res, next) => {
     try {
       // Read unitId from query params (frontend) or user object (fallback)

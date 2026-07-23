@@ -568,6 +568,46 @@ exports.pullAttendanceFromDevice = async (configId, serialNumber, options, user)
     throw new AppError('Device not found', 404);
   }
 
+  // ─── PRE-SYNC CONNECTIVITY CHECK ─────────────────────────────────────────
+  // Validate device is reachable before attempting sync
+  // This prevents "ECONNREFUSED" errors when device goes offline between tests
+  try {
+    const credentials = await getDecryptedConfig(config._id);
+    const adapter     = createAdapter(config.vendor, credentials);
+    
+    // Quick connection test before sync
+    const connectivityResult = await adapter.testConnection();
+    
+    if (!connectivityResult.success) {
+      // Update device status immediately
+      device.connectionStatus = 'OFFLINE';
+      device.lastError = connectivityResult.error;
+      await config.save();
+      
+      throw new AppError(
+        `Device offline: ${connectivityResult.error || 'Connection refused'}. ` +
+        `IP: ${config.serverUrl}. Please check network connectivity.`,
+        503
+      );
+    }
+    
+    // Device is reachable, update status
+    device.connectionStatus = 'ONLINE';
+    device.lastPingAt = new Date();
+    await config.save();
+    
+  } catch (connErr) {
+    // Re-throw AppError instances
+    if (connErr instanceof AppError) throw connErr;
+    
+    // Wrap network errors
+    throw new AppError(
+      `Network error: ${connErr.message}. Device may be offline or unreachable. ` +
+      `Server: ${config.serverUrl}`,
+      503
+    );
+  }
+
   // Create sync log
   const syncLog = await BiometricSyncLog.create({
     org_id:              user.orgId,
@@ -580,7 +620,7 @@ exports.pullAttendanceFromDevice = async (configId, serialNumber, options, user)
   });
 
   try {
-    // Create adapter
+    // Create adapter (reuse credentials from above)
     const credentials = await getDecryptedConfig(config._id);
     const adapter     = createAdapter(config.vendor, credentials);
 
@@ -824,8 +864,9 @@ const processPunchRecords = async (records, config, device, user) => {
 };
 
 // ─── UPDATE ATTENDANCE FROM PUNCH WITH TIMES ────────────────────────────────
-// Creates/updates attendance with firstPunch as checkIn, lastPunch as checkOut
-// Uses combined punch data (no more punch-by-punch processing)
+// Creates/updates attendance with firstPunch as checkIn
+// IMPORTANT: Does NOT set checkOut immediately after shift start
+// checkOut will only be set by evening cron job after shift end
 const updateAttendanceFromPunchWithTimes = async (employee, firstPunchTime, lastPunchTime, config, user) => {
   const checkInTime = new Date(firstPunchTime);
   const checkOutTime = new Date(lastPunchTime);
@@ -841,6 +882,9 @@ const updateAttendanceFromPunchWithTimes = async (employee, firstPunchTime, last
   // Use timezone-aware start of day (same as attendance service)
   const startOfDay = moment(checkInTime).tz(timezone).startOf('day').toDate();
 
+  // Get current time in org timezone
+  const nowInOrg = moment().tz(timezone);
+
   // Find existing attendance for this employee on this date
   let attendance = await Attendance.findOne({
     employeeId: employee._id || employee,
@@ -849,6 +893,51 @@ const updateAttendanceFromPunchWithTimes = async (employee, firstPunchTime, last
     company_id: config.company_id
   });
 
+  // Get employee's shift info
+  const Shift = require('../shift/models/shift.model');
+  const Unit = require('../unit/models/unit.model');
+  
+  let shiftEndTime = null;
+  let isNextDayShift = false;
+  
+  // Try to get shift from attendance record first
+  if (attendance && attendance.shiftEnd) {
+    const [shiftEndH, shiftEndM] = attendance.shiftEnd.split(':').map(Number);
+    shiftEndTime = moment(nowInOrg).set({ hour: shiftEndH, minute: shiftEndM, second: 0, millisecond: 0 });
+    isNextDayShift = attendance.isNextDay || false;
+  } else {
+    // Try to get shift from unit's default shift
+    const unit = await Unit.findOne({ _id: config.unit_id }).select('shiftConfig').lean();
+    
+    if (unit?.shiftConfig?.defaultShift) {
+      const defaultShift = await Shift.findById(unit.shiftConfig.defaultShift).select('endTime isNextDay').lean();
+      
+      if (defaultShift) {
+        const [shiftEndH, shiftEndM] = defaultShift.endTime.split(':').map(Number);
+        shiftEndTime = moment(nowInOrg).set({ hour: shiftEndH, minute: shiftEndM, second: 0, millisecond: 0 });
+        isNextDayShift = defaultShift.isNextDay || false;
+      }
+    }
+  }
+  
+  // ─── DECISION: Should we set checkOut? ─────────────────────────────
+  // Only set checkOut if:
+  // 1. Current time is AFTER shift end time (shift has ended)
+  // 2. lastPunchTime > firstPunchTime (valid punch out exists)
+  
+  let shouldSetCheckOut = false;
+  
+  if (shiftEndTime) {
+    if (isNextDayShift) {
+      shiftEndTime.add(1, 'day');
+    }
+    
+    // Check if current time is after shift end
+    if (nowInOrg.isAfter(shiftEndTime) && checkOutTime > checkInTime) {
+      shouldSetCheckOut = true;
+    }
+  }
+
   if (!attendance) {
     // Create new attendance record
     attendance = await Attendance.create({
@@ -856,9 +945,9 @@ const updateAttendanceFromPunchWithTimes = async (employee, firstPunchTime, last
       userId: employee.userId || employee._id || employee,
       date: startOfDay,
       checkIn: checkInTime,
-      checkOut: checkOutTime > checkInTime ? checkOutTime : null,
+      checkOut: shouldSetCheckOut ? checkOutTime : null,
       status: 'PRESENT',
-      punchSource: checkOutTime > checkInTime ? 'BIOMETRIC_CLOSED' : 'BIOMETRIC',
+      punchSource: shouldSetCheckOut ? 'BIOMETRIC_CLOSED' : 'BIOMETRIC',
       org_id: config.org_id,
       company_id: config.company_id,
       unit_id: config.unit_id
@@ -871,23 +960,30 @@ const updateAttendanceFromPunchWithTimes = async (employee, firstPunchTime, last
       await attendance.save();
     }
 
-    console.log(`[BiometricService] Created attendance for ${employee.employeeId || employee}, checkIn: ${checkInTime}, checkOut: ${checkOutTime}`);
+    console.log(`[BiometricService] Created attendance for ${employee.employeeId || employee}, checkIn: ${checkInTime}, checkOut: ${attendance.checkOut || 'still working'}`);
     return { created: true, attendance };
   }
 
   // Attendance exists - update with new punch times
   attendance.checkIn = checkInTime;
-  attendance.checkOut = checkOutTime > checkInTime ? checkOutTime : null;
-  attendance.punchSource = 'BIOMETRIC_CLOSED';
-
-  // Calculate working hours
-  if (attendance.checkOut) {
+  
+  // Only update checkOut if shift has ended
+  if (shouldSetCheckOut) {
+    attendance.checkOut = checkOutTime;
+    attendance.punchSource = 'BIOMETRIC_CLOSED';
+    
+    // Calculate working hours
     const diffMs = new Date(attendance.checkOut) - new Date(attendance.checkIn);
     attendance.workingHours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
+    
+    console.log(`[BiometricService] Finalized attendance for ${employee.employeeId || employee}, workingHours: ${attendance.workingHours}`);
+  } else {
+    // Keep punchSource as BIOMETRIC (still working)
+    attendance.punchSource = 'BIOMETRIC';
+    console.log(`[BiometricService] Updated attendance for ${employee.employeeId || employee}, still working (shift not ended)`);
   }
 
   await attendance.save();
-  console.log(`[BiometricService] Updated attendance for ${employee.employeeId || employee}, workingHours: ${attendance.workingHours}`);
   return { created: false, updated: true, attendance };
 };
 

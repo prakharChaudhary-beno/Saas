@@ -9,6 +9,8 @@ const Subscription = require("../subscription/models/subscription.Models");
 const sendEmail    = require("../../utils/email/email").sendEmail;
 const { forgotPasswordTemplate } = require("../../utils/email/templates/forgetPassword");
 const Customer = require("../customer/models/customer.model");
+const Organization = require("../organisation/models/organization.model");
+const Company = require("../company/models/company.model");
 
 // ── Plan modules → permission module mapping ──────────────────
 const MODULE_MAP = {
@@ -45,6 +47,11 @@ const filterPermissions = (permissions, subscription) => {
   if (!allowedModules.includes("biometric")) {
     allowedModules.push("biometric");
   }
+
+    if (!allowedModules.includes("account")) {
+    allowedModules.push("account");
+  }
+  
   
   return permissions.filter(p => allowedModules.includes(p.module));
 };
@@ -157,6 +164,30 @@ exports.login = async (payload) => {
     // ── Find Employee record for this user ─────────────────────
     const employee = await Employee.findOne({ userId: user._id }).select("_id profilePhoto").lean();
 
+    // ── Fetch Organization, Company, and Unit details ────────────────────
+    let organization = null;
+    let company = null;
+    let unit = null;
+
+    if (user.org_id) {
+      organization = await Organization.findById(user.org_id)
+        .select("name logo_url address timezone currency")
+        .lean();
+    }
+
+    if (user.company_id) {
+      company = await Company.findById(user.company_id)
+        .select("company_name logo_url company_pan company_gst address")
+        .lean();
+    }
+
+    if (user.unit_id) {
+      const Unit = require("../unit/models/unit.model");
+      unit = await Unit.findById(user.unit_id)
+        .select("name unit_code location")
+        .lean();
+    }
+
     return {
       token,
       is_first_login: user.is_first_login,
@@ -167,11 +198,17 @@ exports.login = async (payload) => {
         email:           user.email,
         phone:           user.phone,
         profilePhoto:    employee?.profilePhoto || null,  // Employee DP
+        orgLogo:         organization?.logo_url || null,    // Organization logo
+        companyLogo:     company?.logo_url || null, // Company logo
         org_id:          user.org_id     || null,
         company_id:      user.company_id || null,
         unit_id:         user.unit_id    || null,
         status:          user.status,
         isEmailVerified: user.isEmailVerified,
+        // ── Populated organization, company, unit for dashboard ──
+        organization:    organization || null,
+        company:         company || null,
+        unit:            unit || null,
         role: {
           id:           user.roleId._id,
           name:         user.roleId.name,

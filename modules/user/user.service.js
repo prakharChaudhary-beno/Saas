@@ -427,29 +427,51 @@ exports.getUsers = async (query, currentUser) => {
     User.find(filter)
       .select("-password -refreshTokens -mfaSecret -mfaTempSecret -mfaBackupCodes -loginAttempts -blockedAt -__v")
       .populate("roleId", "name slug level")
+      .populate("company_id", "company_name logo_url")
+      .populate("unit_id", "unit_name")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit)),
     User.countDocuments(filter),
   ]);
 
-  // Department attach from Employee model
+  // Department + profilePhoto attach from Employee model (for unit-level users)
   const userIds   = users.map((u) => u._id);
   const employees = await Employee.find({
     userId:    { $in: userIds },
     ...buildScopeFilter(currentUser),
     isDeleted: false,
-  }).select("userId departmentId").populate("departmentId", "name");
+  }).select("userId departmentId profilePhoto").populate("departmentId", "name");
 
   const deptMap = {};
+  const photoMap = {};
   employees.forEach((e) => {
-    if (e.userId) deptMap[e.userId.toString()] = e.departmentId;
+    if (e.userId) {
+      deptMap[e.userId.toString()] = e.departmentId;
+      // Store profilePhoto from Employee (unit-level users store photo here)
+      if (e.profilePhoto) {
+        photoMap[e.userId.toString()] = e.profilePhoto;
+      }
+    }
   });
 
-  const usersWithDept = users.map((u) => ({
-    ...u.toObject(),
-    department: deptMap[u._id.toString()] || null,
-  }));
+  const usersWithDept = users.map((u) => {
+    const obj = u.toObject();
+    const userLevel = obj.roleId?.level;
+    
+    // For unit-level users, use profilePhoto from Employee collection if available
+    const profilePhoto = (userLevel === 'unit' && photoMap[u._id.toString()]) 
+      ? photoMap[u._id.toString()] 
+      : obj.profilePhoto;
+    
+    return {
+      ...obj,
+      profilePhoto, // Override with Employee photo for unit users
+      department: deptMap[u._id.toString()] || null,
+      company: obj.company_id || null,
+      unit: obj.unit_id || null,
+    };
+  });
 
   return {
     users: usersWithDept,

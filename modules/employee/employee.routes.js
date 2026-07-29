@@ -227,6 +227,28 @@ router.post(
         });
       }
 
+      // ── SYNC: Update User profile photo for unit-level users ────────────
+      // Units employees have a userId reference to User collection
+      if (employee.userId) {
+        const User = require("../auth/models/user.model");
+        const Role = require("../role/role.model");
+        
+        const user = await User.findById(employee.userId).select("roleId profilePhoto");
+        if (user) {
+          const role = await Role.findById(user.roleId).select("slug level").lean();
+          
+          // Only sync for unit-level users/employees
+          if (role?.level === 'unit' || role?.slug === 'employee') {
+            await User.findByIdAndUpdate(
+              employee.userId,
+              { profilePhoto: req.file.path },
+              { new: true }
+            );
+            console.log(`✅ Synced profile photo to User record for employee ${employee.email}`);
+          }
+        }
+      }
+
       return res.status(200).json({
         success: true,
         message: "Profile photo uploaded successfully",

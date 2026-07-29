@@ -75,3 +75,33 @@ exports.createOrgSchema = Joi.object({
   country:       Joi.string().trim().optional(),
   address:       Joi.object().optional(),
 });
+
+// Public registration validation
+exports.publicRegisterSchema = Joi.object({
+  business_name:  Joi.string().trim().min(2).max(100).required()
+    .messages({ "any.required": "Business name is required" }),
+  
+  contact_name:   Joi.string().trim().min(2).max(100).required()
+    .messages({ "any.required": "Contact name is required" }),
+  
+  contact_email:  Joi.string().email().lowercase().trim().required()
+    .messages({ "any.required": "Contact email is required", "string.email": "Invalid email format" }),
+  
+  work_email:     Joi.string().email().lowercase().trim().optional()
+    .messages({ "string.email": "Invalid work email format" }),
+  
+  same_email:     Joi.boolean().default(true),
+  
+  contact_phone:  Joi.string().trim().min(7).max(15).required()
+    .messages({ "any.required": "Contact phone is required" }),
+  
+  plan_id:        Joi.string().pattern(/^[0-9a-fA-F]{24}$/).required()
+    .messages({ "string.pattern.base": "Invalid plan_id", "any.required": "Plan selection is required" }),
+  
+  country:        Joi.string().trim().max(100).optional(),
+  
+  industry:       Joi.string().trim().max(100).optional(),
+  
+  org_name:       Joi.string().trim().min(2).max(100).optional()
+    .messages({ "string.min": "Organization name must be at least 2 characters" }),
+});

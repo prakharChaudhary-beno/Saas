@@ -228,7 +228,30 @@ about: {
     phone:    { type: String },
     relation: { type: String }
   },
+  // ─── Education ─────────────────────────────────────────────────────────────
+  education: [{
+    institution: { type: String, trim: true },
+    degree:      { type: String, trim: true },
+    from:        { type: Date },
+    to:          { type: Date }
+  }],
 
+  // ─── Work Experience ───────────────────────────────────────────────────────
+  experience: [{
+    company: { type: String, trim: true },
+    role:    { type: String, trim: true },
+    from:    { type: Date },
+    to:      { type: Date },
+    current: { type: Boolean, default: false }
+  }],
+
+  // ─── Family Details ───────────────────────────────────────────────────────
+  familyDetails: [{
+    name:        { type: String, trim: true },
+    relation:    { type: String, trim: true },
+    dateOfBirth: { type: Date },
+    phone:       { type: String }
+  }],
   // ─── Meta ─────────────────────────────────────────
   isDeleted: { type: Boolean, default: false },
   createdBy: { type: Schema.Types.ObjectId, ref: "User" },

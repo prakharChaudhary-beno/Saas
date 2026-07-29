@@ -94,9 +94,50 @@ const calculateForEmployee = async (employee, company_id, unit_id, year, month, 
   const medical= (salary?.medicalAllowance || 0) * proRataFactor;
   const special= (salary?.specialAllowance || 0) * proRataFactor;
 
-  // ── LOP deduction ────────────────────────────────────────────
-  const dailySalary   = totalWorkingDays > 0 ? (basic + hra + travel + medical + special) / totalWorkingDays : 0;
-  const lopDeduction  = parseFloat((lopDays * dailySalary).toFixed(2));
+  // ── LOP calculation using policy formula ──────────────────────
+  // Policy lop config: enabled, calculation ("per_day"/"per_hour"), perDayFormula, roundingRule
+  const lopConfig = policy?.lop || {};
+  const grossEarnings = basic + hra + travel + medical + special;
+  const effectiveWorkingDays = totalWorkingDays > 0 ? totalWorkingDays : 1;
+  
+  let dailySalary = 0;
+  
+  // Apply policy's perDayFormula for LOP calculation
+  switch (lopConfig.perDayFormula) {
+    case "basic_only":
+      dailySalary = basic / effectiveWorkingDays;
+      break;
+    case "basic_hra":
+      dailySalary = (basic + hra) / effectiveWorkingDays;
+      break;
+    case "gross_less_overtime":
+      dailySalary = grossEarnings / effectiveWorkingDays;
+      break;
+    case "gross_with_overtime":
+      // Will add overtime after it's calculated below
+      dailySalary = grossEarnings / effectiveWorkingDays; // Base, overtime added separately
+      break;
+    default:
+      // Default: gross (all earnings) / totalWorkingDays
+      dailySalary = grossEarnings / effectiveWorkingDays;
+  }
+
+  // Apply rounding rule from policy
+  let lopDeductionRaw = lopDays * dailySalary;
+  let lopDeduction;
+  switch (lopConfig.roundingRule) {
+    case "up":
+      lopDeduction = Math.ceil(lopDeductionRaw);
+      break;
+    case "down":
+      lopDeduction = Math.floor(lopDeductionRaw);
+      break;
+    case "nearest":
+      lopDeduction = Math.round(lopDeductionRaw);
+      break;
+    default:
+      lopDeduction = parseFloat(lopDeductionRaw.toFixed(2));
+  }
 
   // ── Overtime pay ─────────────────────────────────────────────
  const hourlyBasic = basic / 26 / 8; // 26 working days, 8 hours/day
@@ -340,7 +381,22 @@ exports.runForEmployee = async (employeeId, company_id, unit_id, month, user) =>
     throw new AppError("Payslip already generated for this month", 409);
   }
 
-  const policy = await resolvePayrollPolicy(employee._id.toString(), company_id, unit_id).catch(() => null);
+  // ── MANDATORY: Payroll policy must exist ───────────────────
+  let policy;
+  try {
+    policy = await resolvePayrollPolicy(employee._id.toString(), company_id, unit_id);
+  } catch (policyErr) {
+    throw new AppError(
+      `No active payroll policy found for employee. Please create and activate a payroll policy before running payroll.`,
+      400
+    );
+  }
+  if (!policy) {
+    throw new AppError(
+      `No active payroll policy found for employee. Please create and activate a payroll policy before running payroll.`,
+      400
+    );
+  }
   const config  = await CompanyConfig.findOne({ company_id }).lean();
 
   const calc = await calculateForEmployee(employee, company_id, unit_id, year, mon, policy, config);
@@ -392,10 +448,31 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
 
   for (const employee of employees) {
     try {
-      const policy = await resolvePayrollPolicy(
-        employee._id.toString(), company_id,
-        employee.unit_id?.toString() || unit_id
-      ).catch(() => null);
+      // ── MANDATORY: Payroll policy must exist ─────────────────
+      let policy;
+      try {
+        policy = await resolvePayrollPolicy(
+          employee._id.toString(), company_id,
+          employee.unit_id?.toString() || unit_id
+        );
+      } catch (policyErr) {
+        results.failed++;
+        results.errors.push({
+          employeeId: employee._id,
+          name: employee.name,
+          error: "No active payroll policy found. Please create and activate a payroll policy."
+        });
+        continue; // Skip this employee, process others
+      }
+      if (!policy) {
+        results.failed++;
+        results.errors.push({
+          employeeId: employee._id,
+          name: employee.name,
+          error: "No active payroll policy found. Please create and activate a payroll policy."
+        });
+        continue;
+      }
 
       const calc = await calculateForEmployee(
         employee, company_id,

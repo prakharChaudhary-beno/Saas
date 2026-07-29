@@ -6,6 +6,16 @@ const controller = require("./company.controller");
 const moduleController = require("./companyModule.controller");
 const { authenticate }    = require("../../middlewares/auth.middleware");
 const checkPermission     = require("../../middlewares/permission.middleware");
+const { upload }          = require("../../config/cloudinary");
+
+// ── Company Logo Upload ────────────────────────────────────────
+// NOTE: Must be BEFORE /:id routes to avoid "logo" being treated as :id param
+router.post(
+  "/logo",
+  authenticate,
+  upload.single("logo"),
+  controller.uploadLogo
+);
 
 // ── Company CRUD ──────────────────────────────────────────────
 // All routes: Org Admin only (permission slug: company.*)

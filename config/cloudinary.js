@@ -40,6 +40,17 @@ const storage = new CloudinaryStorage({
       }
     }
 
+    // Check if it's company logo
+    if (req.path.includes('/company/logo') || (req.baseUrl.includes('/company') && file.fieldname === 'logo')) {
+      return {
+        folder: 'hrms/companies/logos',
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
+        resource_type: 'image',
+        transformation: [{ width: 512, height: 512, crop: 'limit' }],
+        public_id: `company-${req.user?.companyId || 'unknown'}-${Date.now()}`
+      }
+    }
+
     // Default for employee documents
     return {
       folder: `hrms/employees/${req.params.id}/documents`,

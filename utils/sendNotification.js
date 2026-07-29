@@ -19,7 +19,7 @@ const TEMPLATES = {
   LEAVE_APPLIED: (data) => ({
     title: `Leave Request — ${data.employeeName}`,
     message: `${data.employeeName} has applied for ${data.leaveType} from ${data.startDate} to ${data.endDate} (${data.totalDays} day(s)). Please review.`,
-    actionUrl: `/leave/requests/${data.leaveId}`,
+    actionUrl: `/leaves`,
     actionLabel: "Review Request",
     priority: "HIGH",
     icon: "tabler:calendar-plus"
@@ -28,7 +28,7 @@ const TEMPLATES = {
   LEAVE_APPROVED: (data) => ({
     title: `Leave Approved ✅`,
     message: `Your ${data.leaveType} from ${data.startDate} to ${data.endDate} has been approved by ${data.approverName}.`,
-    actionUrl: `/leave/my-requests`,
+    actionUrl: `/leaves`,
     actionLabel: "View Leave",
     priority: "MEDIUM",
     icon: "tabler:check"
@@ -37,10 +37,19 @@ const TEMPLATES = {
   LEAVE_REJECTED: (data) => ({
     title: `Leave Rejected ❌`,
     message: `Your ${data.leaveType} from ${data.startDate} to ${data.endDate} has been rejected. ${data.comment ? `Reason: ${data.comment}` : ""}`,
-    actionUrl: `/leave/my-requests`,
+    actionUrl: `/leaves`,
     actionLabel: "View Details",
     priority: "HIGH",
     icon: "tabler:x"
+  }),
+
+  LEAVE_UNDER_REVIEW: (data) => ({
+    title: `Leave Status Update — ${data.status}`,
+    message: data.message || `Your ${data.leaveType} from ${data.startDate} to ${data.endDate} is now ${data.status}. ${data.approvedBy ? `Approved by: ${data.approvedBy}` : ""}`,
+    actionUrl: `/leaves`,
+    actionLabel: "View Leave",
+    priority: "MEDIUM",
+    icon: "tabler:clock"
   }),
 
   LEAVE_CANCELLED: (data) => ({

@@ -338,6 +338,45 @@ exports.getUsers = async (query, currentUser) => {
     filter.roleId = { $ne: employeeRole._id };
   }
 
+  // ── SECURITY: Role Level Hierarchy Filtering - STRICT LEVEL ISOLATION ──
+  // org_admin → can see/edit org + company (NOT unit)
+  // company_admin → can see/edit ONLY company (NOT org, NOT unit)
+  // unit_admin → can see/edit ONLY unit
+  const hierarchy = { org: 1, company: 2, unit: 3 };
+  const currentUserLevelOrder = hierarchy[currentUser.level] || 3;
+  
+  // Determine accessible levels - STRICT ISOLATION
+  let accessibleRoleLevels;
+  if (currentUser.level === 'org') {
+    // org_admin can manage org + company (NOT unit)
+    accessibleRoleLevels = ['org', 'company'];
+  } else if (currentUser.level === 'company') {
+    // company_admin can ONLY manage company (NOT org, NOT unit)
+    accessibleRoleLevels = ['company'];
+  } else {
+    // unit_admin can only manage their own level
+    accessibleRoleLevels = [currentUser.level];
+  }
+    
+  const accessibleRoles = await Role.find({
+    level: { $in: accessibleRoleLevels },
+    $or: [
+      { org_id: currentUser.orgId },
+      { org_id: null, isSystem: true }
+    ],
+    isDeleted: false
+  }).distinct('_id');
+  
+  // Combine with employee exclusion
+  if (employeeRole) {
+    filter.roleId = { 
+      $in: accessibleRoles,
+      $ne: employeeRole._id 
+    };
+  } else {
+    filter.roleId = { $in: accessibleRoles };
+  }
+
   // T-25 — Filter by role type (Administrative/Privilege/General)
   if (query.roleType) {
     const matchingRoles = await Role.find({
@@ -388,29 +427,51 @@ exports.getUsers = async (query, currentUser) => {
     User.find(filter)
       .select("-password -refreshTokens -mfaSecret -mfaTempSecret -mfaBackupCodes -loginAttempts -blockedAt -__v")
       .populate("roleId", "name slug level")
+      .populate("company_id", "company_name logo_url")
+      .populate("unit_id", "unit_name")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit)),
     User.countDocuments(filter),
   ]);
 
-  // Department attach from Employee model
+  // Department + profilePhoto attach from Employee model (for unit-level users)
   const userIds   = users.map((u) => u._id);
   const employees = await Employee.find({
     userId:    { $in: userIds },
     ...buildScopeFilter(currentUser),
     isDeleted: false,
-  }).select("userId departmentId").populate("departmentId", "name");
+  }).select("userId departmentId profilePhoto").populate("departmentId", "name");
 
   const deptMap = {};
+  const photoMap = {};
   employees.forEach((e) => {
-    if (e.userId) deptMap[e.userId.toString()] = e.departmentId;
+    if (e.userId) {
+      deptMap[e.userId.toString()] = e.departmentId;
+      // Store profilePhoto from Employee (unit-level users store photo here)
+      if (e.profilePhoto) {
+        photoMap[e.userId.toString()] = e.profilePhoto;
+      }
+    }
   });
 
-  const usersWithDept = users.map((u) => ({
-    ...u.toObject(),
-    department: deptMap[u._id.toString()] || null,
-  }));
+  const usersWithDept = users.map((u) => {
+    const obj = u.toObject();
+    const userLevel = obj.roleId?.level;
+    
+    // For unit-level users, use profilePhoto from Employee collection if available
+    const profilePhoto = (userLevel === 'unit' && photoMap[u._id.toString()]) 
+      ? photoMap[u._id.toString()] 
+      : obj.profilePhoto;
+    
+    return {
+      ...obj,
+      profilePhoto, // Override with Employee photo for unit users
+      department: deptMap[u._id.toString()] || null,
+      company: obj.company_id || null,
+      unit: obj.unit_id || null,
+    };
+  });
 
   return {
     users: usersWithDept,
@@ -447,7 +508,40 @@ exports.updateUser = async (id, data, currentUser) => {
   const fromRoleId  = user.roleId || null;
 
     if (roleChanged) {
-    const newRole = await Role.findById(data.roleId).select("slug").lean();
+    const newRole = await Role.findById(data.roleId).select("slug level").lean();
+    
+    if (!newRole) {
+      throw new AppError("Role not found", 404);
+    }
+    
+    // ── SECURITY: Check role hierarchy - STRICT LEVEL ISOLATION ──
+    const hierarchy = { org: 1, company: 2, unit: 3 };
+    const currentUserLevelOrder = hierarchy[currentUser.level] || 3;
+    const targetLevelOrder = hierarchy[newRole.level] || 3;
+    
+    // Determine allowed target levels - STRICT ISOLATION
+    let allowedTargetLevels;
+    if (currentUser.level === 'org') {
+      // org_admin can assign org or company roles (NOT unit)
+      allowedTargetLevels = ['org', 'company'];
+    } else if (currentUser.level === 'company') {
+      // company_admin can ONLY assign company roles (NOT org, NOT unit)
+      allowedTargetLevels = ['company'];
+    } else {
+      // unit_admin can only assign their own level
+      allowedTargetLevels = [currentUser.level];
+    }
+    
+    if (!allowedTargetLevels.includes(newRole.level)) {
+      throw new AppError(`You cannot assign ${newRole.level} level role`, 403);
+    }
+    
+    // Can ONLY edit users with roles within allowed levels
+    const userRole = await Role.findById(user.roleId).select('level').lean();
+    
+    if (!allowedTargetLevels.includes(userRole?.level)) {
+      throw new AppError(`You cannot edit users with ${userRole?.level || 'unknown'} level role`, 403);
+    }
 
     if (newRole && ["company_admin", "unit_admin"].includes(newRole.slug)) {
       const scopeFilter = {

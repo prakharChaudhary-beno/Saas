@@ -77,6 +77,12 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // ─── Profile Photo for Admin Users ────────────────────────
+    profilePhoto: {
+      type: String,
+      default: null,
+    },
+
     // ─── Auth ─────────────────────────────────────────────────
     password: {
       type: String,

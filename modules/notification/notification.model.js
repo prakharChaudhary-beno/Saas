@@ -24,6 +24,7 @@ const notificationSchema = new Schema({
       "LEAVE_APPLIED",
       "LEAVE_APPROVED",
       "LEAVE_REJECTED",
+      "LEAVE_UNDER_REVIEW",
       "LEAVE_CANCELLED",
 
       // Attendance

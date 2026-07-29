@@ -152,6 +152,18 @@ const permissions = [
 // ─── Audit Log ────────────────────────────────────────────
 { name: "auditLog.read", slug: "auditLog.read", module: "auditLog", action: "read", label: "View Audit Logs", scope: ["org", "company", "unit"], description: "View audit trail", category: "Configuration", frRef: null },
 
+// ─── Investment Declaration ─────────────────────────────────
+{ name: "investment_declaration.create", slug: "investment_declaration.create", module: "investment_declaration", action: "create", label: "Create Investment Declaration", scope: ["unit"], description: "Create investment declaration", category: "Payroll", frRef: null },
+{ name: "investment_declaration.read", slug: "investment_declaration.read", module: "investment_declaration", action: "read", label: "View Investment Declarations", scope: ["org", "company", "unit"], description: "View investment declarations", category: "Payroll", frRef: null },
+{ name: "investment_declaration.update", slug: "investment_declaration.update", module: "investment_declaration", action: "update", label: "Review Investment Declaration", scope: ["unit", "company"], description: "Approve/reject investment declarations", category: "Payroll", frRef: null },
+{ name: "investment_declaration.delete", slug: "investment_declaration.delete", module: "investment_declaration", action: "delete", label: "Delete Investment Declaration", scope: ["unit"], description: "Delete investment declaration", category: "Payroll", frRef: null },
+
+// ─── Biometric ────────────────────────────────────────────────
+{ name: "biometric.create", slug: "biometric.create", module: "biometric", action: "create", label: "Create Biometric Config", scope: ["unit"], description: "Create biometric configuration", category: "Configuration", frRef: null },
+{ name: "biometric.read", slug: "biometric.read", module: "biometric", action: "read", label: "View Biometric Config", scope: ["org", "company", "unit"], description: "View biometric configuration", category: "Configuration", frRef: null },
+{ name: "biometric.update", slug: "biometric.update", module: "biometric", action: "update", label: "Edit Biometric Config", scope: ["unit", "company"], description: "Update biometric configuration", category: "Configuration", frRef: null },
+{ name: "biometric.delete", slug: "biometric.delete", module: "biometric", action: "delete", label: "Delete Biometric Config", scope: ["unit"], description: "Delete biometric configuration", category: "Configuration", frRef: null },
+
 ];
 
 exports.seedPermissions = async () => {

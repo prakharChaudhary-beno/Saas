@@ -12,6 +12,7 @@ const { requireTenantUser }            = require("../../middlewares/checkRole.mi
 const checkPermission                  = require("../../middlewares/permission.middleware");
 const validate                         = require("../../middlewares/validate.middleware");
 const { inviteUserSchema, updateUserSchema } = require("./user.validation");
+const { upload }                        = require("../../config/cloudinary");
 
 // ── Global guards — sab routes ke liye ───────────────────────
 router.use(authenticate);
@@ -33,6 +34,15 @@ router.get(
   "/",
   checkPermission("user.read"),
   controller.getUsers
+);
+
+// ── POST /users/:id/photo (Upload Profile Photo) ────────────────
+// Requires: employee.update permission
+router.post(
+  "/:id/photo",
+  checkPermission("employee.update"),
+  upload.single("profilePhoto"),
+  controller.uploadProfilePhoto
 );
 
 // ── GET /users/:id/progression ────────────────────────────────

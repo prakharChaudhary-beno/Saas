@@ -92,11 +92,12 @@ const resolveApprovers = async (employee, user, leavePolicy) => {
         console.error('[resolveApprovers] Error resolving L1 approver:', error);
       }
     } else {
-      console.warn('[resolveApprovers] Employee has no reportingManagerId');
+      console.warn('[resolveApprovers] Employee has no reportingManagerId - will fallback to HR');
     }
   }
 
   // L2 — HR Manager in unit (if type is L1_L2 or no L1 found)
+  // If L1 not found, L2 becomes the fallback approver
   if (approvalType === "L1_L2" || (approvalType === "L1" && !l1ApproverId)) {
     // Try multiple HR role slugs for flexibility
     const hrRoleSlugs = ["hr_manager", "company_hr_manager", "hr", "HR", "hr-admin"];
@@ -156,6 +157,14 @@ const resolveApprovers = async (employee, user, leavePolicy) => {
     } else {
       console.warn('[resolveApprovers] No HR role found with slugs:', hrRoleSlugs);
     }
+  }
+
+  // FALLBACK: If no L1 approver but L2 exists, use L2 as fallback approver
+  // This ensures leave requests always have at least one approver
+  if (!l1ApproverId && l2ApproverId) {
+    console.log('[resolveApprovers] L1 unavailable - using L2 (HR) as fallback approver');
+    l1ApproverId = l2ApproverId;
+    l2ApproverId = null; // Clear L2 since we moved it to L1
   }
 
   // AUTO → no approver, auto-approve logic
@@ -464,27 +473,150 @@ exports.applyLeave = async (payload, user) => {
     }
   }
 
-  // In-app + Push notification to L1 approver
+  // ════════════════════════════════════════════════════════════
+  // ENHANCED NOTIFICATION SYSTEM - NOTIFY ALL STAKEHOLDERS
+  // ════════════════════════════════════════════════════════════
+  // When employee applies for leave:
+  // 1. L1 (Reporting Manager) - Primary approver
+  // 2. L2 (HR Manager) - Secondary approver
+  // 3. Admin (org_admin/company_admin) - Oversight
+  
+  const notifyUserIds = new Set();
+  const notificationPromises = [];
+  
+  // 1. Notify L1 Approver (Reporting Manager)
   if (l1ApproverId) {
-    sendNotification({
-      type:          "LEAVE_APPLIED",
-      userId:        l1ApproverId,
-      org_id:        user.orgId,
-      unit_id:       user.unitId,
-      referenceId:   leaveRequest._id,
-      referenceType: "LeaveRequest",
-      data: {
-        employeeName: employee.name,
-        leaveType:    leaveType?.code || "Leave",
-        startDate:    fmtDate(start),
-        endDate:      fmtDate(end),
-        totalDays,
-        leaveId:      leaveRequest._id,
-      },
-      inApp:  true,   // In-app notification
-      email:  false,  // Email already sent above
-      push:   true    // Push notification
-    }).catch(() => {});
+    notifyUserIds.add(String(l1ApproverId));
+    notificationPromises.push(
+      (async () => {
+        try {
+          const notifResult = await sendNotification({
+            type:          "LEAVE_APPLIED",
+            userId:        l1ApproverId,
+            org_id:        user.orgId,
+            unit_id:       user.unitId,
+            referenceId:   leaveRequest._id,
+            referenceType: "LeaveRequest",
+            data: {
+              employeeName: employee.name,
+              leaveType:    leaveType?.code || "Leave",
+              startDate:    fmtDate(start),
+              endDate:      fmtDate(end),
+              totalDays,
+              leaveId:      leaveRequest._id,
+              priority:     "HIGH",
+            },
+            inApp:  true,
+            email:  false,
+            push:   true
+          });
+          
+          if (notifResult?.inApp?.success) {
+            console.log('[applyLeave] ✅ Notification sent to L1 approver:', l1ApproverId);
+          } else {
+            console.error('[applyLeave] ⚠️ L1 notification failed:', JSON.stringify(notifResult, null, 2));
+          }
+        } catch (err) {
+          console.error('[applyLeave] ❌ L1 notification exception:', err.message);
+        }
+      })()
+    );
+  }
+  
+  // 2. Notify L2 Approver (HR Manager) - If different from L1
+  if (l2ApproverId && !notifyUserIds.has(String(l2ApproverId))) {
+    notifyUserIds.add(String(l2ApproverId));
+    notificationPromises.push(
+      (async () => {
+        try {
+          const notifResult = await sendNotification({
+            type:          "LEAVE_APPLIED",
+            userId:        l2ApproverId,
+            org_id:        user.orgId,
+            unit_id:       user.unitId,
+            referenceId:   leaveRequest._id,
+            referenceType: "LeaveRequest",
+            data: {
+              employeeName: employee.name,
+              leaveType:    leaveType?.code || "Leave",
+              startDate:    fmtDate(start),
+              endDate:      fmtDate(end),
+              totalDays,
+              leaveId:      leaveRequest._id,
+              priority:     "MEDIUM",
+              note:         "For your information - pending L1 approval",
+            },
+            inApp:  true,
+            email:  false,
+            push:   true
+          });
+          
+          if (notifResult?.inApp?.success) {
+            console.log('[applyLeave] ✅ Notification sent to L2 (HR):', l2ApproverId);
+          } else {
+            console.error('[applyLeave] ⚠️ L2 notification failed:', JSON.stringify(notifResult, null, 2));
+          }
+        } catch (err) {
+          console.error('[applyLeave] ❌ L2 notification exception:', err.message);
+        }
+      })()
+    );
+  }
+  
+  // 3. Notify Admin Users (org_admin, company_admin) - For oversight
+  const adminUsers = await User.find({
+    org_id: user.orgId,
+    role: { $in: ["org_admin", "company_admin", "SUPER_ADMIN"] },
+    status: "ACTIVE",
+    is_deleted: false
+  }).select("_id").lean();
+  
+  for (const admin of adminUsers) {
+    const adminId = String(admin._id);
+    if (!notifyUserIds.has(adminId)) {
+      notifyUserIds.add(adminId);
+      notificationPromises.push(
+        (async () => {
+          try {
+            const notifResult = await sendNotification({
+              type:          "LEAVE_APPLIED",
+              userId:        adminId,
+              org_id:        user.orgId,
+              unit_id:       user.unitId,
+              referenceId:   leaveRequest._id,
+              referenceType: "LeaveRequest",
+              data: {
+                employeeName: employee.name,
+                leaveType:    leaveType?.code || "Leave",
+                startDate:    fmtDate(start),
+                endDate:      fmtDate(end),
+                totalDays,
+                leaveId:      leaveRequest._id,
+                priority:     "LOW",
+                note:         "For your oversight",
+              },
+              inApp:  true,
+              email:  false,
+              push:   false  // Don't push notify admins
+            });
+            
+            if (notifResult?.inApp?.success) {
+              console.log('[applyLeave] ✅ Notification sent to Admin:', adminId);
+            }
+          } catch (err) {
+            console.error('[applyLeave] ❌ Admin notification exception:', err.message);
+          }
+        })()
+      );
+    }
+  }
+  
+  // Wait for all notifications to complete
+  await Promise.allSettled(notificationPromises);
+  console.log(`[applyLeave] ✅ Total stakeholders notified: ${notifyUserIds.size}`);
+  
+  if (!l1ApproverId && !l2ApproverId) {
+    console.warn('[applyLeave] ⚠️ No L1/L2 approver available - only admin notified.');
   }
 
   return leaveRequest;
@@ -935,20 +1067,32 @@ exports.updateLeaveStatus = async (id, payload, user) => {
   request.updatedBy = user.userId;
   await request.save();
 
-  // T-31 — Notify L2 if L1 approved and forwarded
-  // Matrix Requirement: Leave forwarded to L2 (🔔+📧+📱)
+  // ════════════════════════════════════════════════════════════
+  // ENHANCED NOTIFICATION - L1 APPROVED & FORWARDED TO L2
+  // ════════════════════════════════════════════════════════════
+  // Notify: 1) L2 (HR) - Needs to approve
+  //        2) Employee - Status updated to UNDER_REVIEW
+  //        3) Admin - Oversight
+  //        4) L1 - Confirmation (optional)
+  
+  const employeeName  = request.employeeId?.name || "Employee";
+  const employeeEmail = request.employeeId?.email;
+  const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name code");
+  
+  const notificationPromises = [];
+  
+  // 1. Notify L2 (HR Manager) - Primary action needed
   if (request.status === "UNDER_REVIEW" && request.l2ApproverId) {
-    const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name code");
-    
+    // Email to L2
     try {
       const l2Approver = await User.findById(request.l2ApproverId).select("name email");
       if (l2Approver?.email) {
         await sendEmail({
           to:      l2Approver.email,
-          subject: `Leave Request Pending Your Approval — ${employeeName || "Employee"}`,
+          subject: `Leave Request Pending Your Approval — ${employeeName}`,
           html:    leavePendingTemplate({
             approverName: l2Approver.name || "Manager",
-            employeeName: employeeName || "Employee",
+            employeeName: employeeName,
             leaveType:    leaveTypeDoc?.name || "Leave",
             startDate:    fmtDate(request.startDate),
             endDate:      fmtDate(request.endDate),
@@ -956,39 +1100,137 @@ exports.updateLeaveStatus = async (id, payload, user) => {
             reason:       request.reason || "",
           }),
         });
+        console.log(`[updateLeaveStatus] ✅ Email sent to L2 approver: ${l2Approver.email}`);
       }
     } catch (e) {
-      console.error("L2 notification failed:", e.message);
+      console.error("[L2 Email] Failed:", e.message);
     }
     
-    // N-32: In-App + Push Notification to L2 when L1 forwards
-    sendNotification({
-      type:          "LEAVE_APPLIED",  // Reuse same type for L2 approval queue
-      userId:        request.l2ApproverId,
-      org_id:        request.org_id,
-      unit_id:       request.unit_id,
-      referenceId:   request._id,
-      referenceType: "LeaveRequest",
-      data: {
-        employeeName: employeeName || "Employee",
-        leaveType:    leaveTypeDoc?.name || "Leave",
-        startDate:    fmtDate(request.startDate),
-        endDate:      fmtDate(request.endDate),
-        totalDays:    request.totalDays,
-        leaveId:      request._id,
-        forwardedBy:  user.name || "L1 Approver",
-      },
-      inApp:  true,   // In-app notification ✓
-      email:  false,  // Email already sent above
-      push:   true    // Push notification ✓
-    }).catch((err) => console.error("[L2 Forward Notification] Failed:", err.message));
-    
-    console.log(`[updateLeaveStatus] ✅ In-app notification sent to L2 ${request.l2ApproverId} for approval`);
+    // In-App + Push to L2
+    notificationPromises.push(
+      (async () => {
+        try {
+          const notifResult = await sendNotification({
+            type:          "LEAVE_APPLIED",
+            userId:        request.l2ApproverId,
+            org_id:        request.org_id,
+            unit_id:       request.unit_id,
+            referenceId:   request._id,
+            referenceType: "LeaveRequest",
+            data: {
+              employeeName: employeeName,
+              leaveType:    leaveTypeDoc?.name || "Leave",
+              startDate:    fmtDate(request.startDate),
+              endDate:      fmtDate(request.endDate),
+              totalDays:    request.totalDays,
+              leaveId:      request._id,
+              forwardedBy:  user.name || "L1 Approver",
+              priority:     "HIGH",
+            },
+            inApp:  true,
+            email:  false,
+            push:   true
+          });
+          
+          if (notifResult?.inApp?.success) {
+            console.log(`[updateLeaveStatus] ✅ Notification sent to L2: ${request.l2ApproverId}`);
+          } else {
+            console.error(`[updateLeaveStatus] ⚠️ L2 notification failed:`, notifResult);
+          }
+        } catch (err) {
+          console.error("[L2 Notification] Exception:", err.message);
+        }
+      })()
+    );
   }
-
-  // T-31 — Notify employee on final decision
-  const employeeEmail = request.employeeId?.email;
-  const employeeName  = request.employeeId?.name || "Employee";
+  
+  // 2. Notify Employee - Status updated to UNDER_REVIEW
+  if (request.status === "UNDER_REVIEW") {
+    notificationPromises.push(
+      (async () => {
+        try {
+          const notifResult = await sendNotification({
+            type:          "LEAVE_UNDER_REVIEW",
+            userId:        request.userId,
+            org_id:        request.org_id,
+            unit_id:       request.unit_id,
+            referenceId:   request._id,
+            referenceType: "LeaveRequest",
+            data: {
+              employeeName: employeeName,
+              leaveType:    leaveTypeDoc?.name || "Leave",
+              startDate:    fmtDate(request.startDate),
+              endDate:      fmtDate(request.endDate),
+              totalDays:    request.totalDays,
+              leaveId:      request._id,
+              status:       "UNDER_REVIEW",
+              approvedBy:   user.name || "L1 Approver",
+              message:      "Your leave request has been approved by L1 and forwarded to HR for final approval.",
+            },
+            inApp:  true,
+            email:  false,
+            push:   true
+          });
+          
+          if (notifResult?.inApp?.success) {
+            console.log(`[updateLeaveStatus] ✅ Status update notification sent to employee`);
+          }
+        } catch (err) {
+          console.error("[Employee Status Notification] Exception:", err.message);
+        }
+      })()
+    );
+  }
+  
+  // 3. Notify Admin Users - For oversight
+  const adminUsers = await User.find({
+    org_id: request.org_id,
+    role: { $in: ["org_admin", "company_admin", "SUPER_ADMIN"] },
+    status: "ACTIVE",
+    is_deleted: false,
+    _id: { $ne: user.userId }  // Don't notify the approver
+  }).select("_id").lean();
+  
+  for (const admin of adminUsers) {
+    notificationPromises.push(
+      (async () => {
+        try {
+          const notifResult = await sendNotification({
+            type:          "LEAVE_APPLIED",
+            userId:        admin._id,
+            org_id:        request.org_id,
+            unit_id:       request.unit_id,
+            referenceId:   request._id,
+            referenceType: "LeaveRequest",
+            data: {
+              employeeName: employeeName,
+              leaveType:    leaveTypeDoc?.name || "Leave",
+              startDate:    fmtDate(request.startDate),
+              endDate:      fmtDate(request.endDate),
+              totalDays:    request.totalDays,
+              leaveId:      request._id,
+              status:       request.status,
+              approvedBy:   user.name || "L1 Approver",
+              note:         "L1 approved and forwarded to L2",
+            },
+            inApp:  true,
+            email:  false,
+            push:   false
+          });
+          
+          if (notifResult?.inApp?.success) {
+            console.log(`[updateLeaveStatus] ✅ Admin notification sent`);
+          }
+        } catch (err) {
+          console.error("[Admin Notification] Exception:", err.message);
+        }
+      })()
+    );
+  }
+  
+  // Wait for all notifications
+  await Promise.allSettled(notificationPromises);
+  console.log(`[updateLeaveStatus] ✅ All stakeholders notified for L1 approval`);
 
   if (employeeEmail && ["APPROVED", "REJECTED"].includes(request.status)) {
     const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name code");
@@ -1022,36 +1264,173 @@ exports.updateLeaveStatus = async (id, payload, user) => {
   }
 
   // ════════════════════════════════════════════════════════════
-  // N-31: In-App + Push Notification to Employee on Final Decision
-  // Matrix Requirement: Leave approved (🔔+📧), Leave rejected (🔔+📧)
+  // ENHANCED NOTIFICATION - FINAL DECISION (APPROVED/REJECTED)
   // ════════════════════════════════════════════════════════════
+  // Notify: 1) Employee - Decision received
+  //        2) L1 Approver - Notified of final result
+  //        3) L2 Approver (if exists) - Confirmation
+  //        4) Admin - Oversight
+  
   if (["APPROVED", "REJECTED"].includes(request.status)) {
-    const leaveTypeDoc = await LeaveType.findById(request.leaveTypeId).select("name code");
-    const approverUser = await User.findById(user.userId).select("name");
+    const notificationPromises = [];
     
-    sendNotification({
-      type:          request.status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
-      userId:        request.userId,  // Notify the employee
-      org_id:        request.org_id,
-      unit_id:       request.unit_id,
-      referenceId:   request._id,
-      referenceType: "LeaveRequest",
-      data: {
-        employeeName: employeeName,
-        leaveType:    leaveTypeDoc?.name || "Leave",
-        startDate:    fmtDate(request.startDate),
-        endDate:      fmtDate(request.endDate),
-        totalDays:    request.totalDays,
-        approverName: approverUser?.name || "Manager",
-        comment:      remarks || "",
-        leaveId:      request._id,
-      },
-      inApp:  true,   // In-app notification ✓ (matrix requirement)
-      email:  false,  // Email already sent above
-      push:   true    // Push notification (future-ready)
-    }).catch((err) => console.error("[Leave Status Notification] Failed:", err.message));
+    // 1. Notify Employee - Primary recipient
+    notificationPromises.push(
+      (async () => {
+        try {
+          const notifResult = await sendNotification({
+            type:          request.status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
+            userId:        request.userId,
+            org_id:        request.org_id,
+            unit_id:       request.unit_id,
+            referenceId:   request._id,
+            referenceType: "LeaveRequest",
+            data: {
+              employeeName: employeeName,
+              leaveType:    leaveTypeDoc?.name || "Leave",
+              startDate:    fmtDate(request.startDate),
+              endDate:      fmtDate(request.endDate),
+              totalDays:    request.totalDays,
+              approverName: user.name || "Manager",
+              comment:      remarks || "",
+              leaveId:      request._id,
+            },
+            inApp:  true,
+            email:  false,
+            push:   true
+          });
+          
+          if (notifResult?.inApp?.success) {
+            console.log(`[updateLeaveStatus] ✅ Final decision notification sent to employee`);
+          } else {
+            console.error(`[updateLeaveStatus] ⚠️ Employee notification failed:`, notifResult);
+          }
+        } catch (err) {
+          console.error("[Employee Final Notification] Exception:", err.message);
+        }
+      })()
+    );
     
-    console.log(`[updateLeaveStatus] ✅ In-app notification sent to employee ${request.userId} for ${request.status}`);
+    // 2. Notify L1 Approver - Confirmation
+    if (request.l1ApproverId && String(request.l1ApproverId) !== String(user.userId)) {
+      notificationPromises.push(
+        (async () => {
+          try {
+            const notifResult = await sendNotification({
+              type:          request.status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
+              userId:        request.l1ApproverId,
+              org_id:        request.org_id,
+              unit_id:       request.unit_id,
+              referenceId:   request._id,
+              referenceType: "LeaveRequest",
+              data: {
+                employeeName: employeeName,
+                leaveType:    leaveTypeDoc?.name || "Leave",
+                startDate:    fmtDate(request.startDate),
+                endDate:      fmtDate(request.endDate),
+                totalDays:    request.totalDays,
+                status:       request.status,
+                approverName: user.name || "L2 Approver",
+                note:         "Leave request you approved has been finalized",
+              },
+              inApp:  true,
+              email:  false,
+              push:   false
+            });
+            
+            if (notifResult?.inApp?.success) {
+              console.log(`[updateLeaveStatus] ✅ L1 notified of final decision`);
+            }
+          } catch (err) {
+            console.error("[L1 Confirmation] Exception:", err.message);
+          }
+        })()
+      );
+    }
+    
+    // 3. Notify L2 Approver (if different from action taker) - Confirmation
+    if (request.l2ApproverId && String(request.l2ApproverId) !== String(user.userId)) {
+      notificationPromises.push(
+        (async () => {
+          try {
+            const notifResult = await sendNotification({
+              type:          request.status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
+              userId:        request.l2ApproverId,
+              org_id:        request.org_id,
+              unit_id:       request.unit_id,
+              referenceId:   request._id,
+              referenceType: "LeaveRequest",
+              data: {
+                employeeName: employeeName,
+                leaveType:    leaveTypeDoc?.name || "Leave",
+                startDate:    fmtDate(request.startDate),
+                endDate:      fmtDate(request.endDate),
+                totalDays:    request.totalDays,
+                status:       request.status,
+                message:      `Leave request has been ${request.status.toLowerCase()}`,
+              },
+              inApp:  true,
+              email:  false,
+              push:   false
+            });
+            
+            if (notifResult?.inApp?.success) {
+              console.log(`[updateLeaveStatus] ✅ L2 notified of final decision`);
+            }
+          } catch (err) {
+            console.error("[L2 Confirmation] Exception:", err.message);
+          }
+        })()
+      );
+    }
+    
+    // 4. Notify Admin Users - Oversight
+    const adminUsers = await User.find({
+      org_id: request.org_id,
+      role: { $in: ["org_admin", "company_admin", "SUPER_ADMIN"] },
+      status: "ACTIVE",
+      is_deleted: false,
+      _id: { $ne: user.userId }
+    }).select("_id").lean();
+    
+    for (const admin of adminUsers) {
+      notificationPromises.push(
+        (async () => {
+          try {
+            const notifResult = await sendNotification({
+              type:          request.status === "APPROVED" ? "LEAVE_APPROVED" : "LEAVE_REJECTED",
+              userId:        admin._id,
+              org_id:        request.org_id,
+              unit_id:       request.unit_id,
+              referenceId:   request._id,
+              referenceType: "LeaveRequest",
+              data: {
+                employeeName: employeeName,
+                leaveType:    leaveTypeDoc?.name || "Leave",
+                startDate:    fmtDate(request.startDate),
+                endDate:      fmtDate(request.endDate),
+                totalDays:    request.totalDays,
+                status:       request.status,
+                note:         "Final decision completed",
+              },
+              inApp:  true,
+              email:  false,
+              push:   false
+            });
+            
+            if (notifResult?.inApp?.success) {
+              console.log(`[updateLeaveStatus] ✅ Admin notified of final decision`);
+            }
+          } catch (err) {
+            console.error("[Admin Notification] Exception:", err.message);
+          }
+        })()
+      );
+    }
+    
+    // Wait for all notifications
+    await Promise.allSettled(notificationPromises);
+    console.log(`[updateLeaveStatus] ✅ All stakeholders notified for final decision`);
   }
 
   return request;
@@ -1105,18 +1484,37 @@ exports.getPendingApprovals = async (query, user) => {
 
   // ── SEQUENTIAL APPROVAL FILTER ─────────────────────────────
   // HR Manager sees all requests in their unit/company
+  // FIXED: Admin can see ALL UNDER_REVIEW leaves even if L1=L2 conflict
+  const isAdminLevel = ["org_admin", "company_admin", "SUPER_ADMIN"].includes(user.role);
+  
   if (isHRManager) {
     console.log('[getPendingApprovals] User is HR Manager, setting L2 filter');
     if (user.unitId) {
       filter.unit_id = user.unitId;
     }
-    // L2 approvers see requests where l1 is APPROVED and l2 is pending
-    filter.$or = [
-      { l2ApproverId: user.userId, l1Status: "APPROVED", l2Status: { $in: ["PENDING", null] } },
-      // Also show requests directly assigned to them without L1 requirement
-      { l2ApproverId: user.userId, l1ApproverId: null, l2Status: { $in: ["PENDING", null] } },
-    ];
-    console.log('[getPendingApprovals] L2 filter:', JSON.stringify(filter, null, 2));
+    
+    // FIXED: Show UNDER_REVIEW leaves even if L1=L2 (role conflict) or l2ApproverId not assigned
+    if (isAdminLevel) {
+      // Admin sees ALL UNDER_REVIEW requests for oversight (including L1=L2 conflicts)
+      filter.$or = [
+        // Case 1: Explicitly assigned as L2 approver
+        { l2ApproverId: user.userId, l1Status: "APPROVED", l2Status: { $in: ["PENDING", null] } },
+        // Case 2: No L2 assigned - any Admin can approve
+        { l2ApproverId: null, l1Status: "APPROVED", status: "UNDER_REVIEW" },
+        // Case 3: L1=L2 same person (role conflict) - Admin can step in
+        { l1ApproverId: user.userId, l2ApproverId: user.userId, l1Status: "APPROVED", status: "UNDER_REVIEW" },
+        // Case 4: Any UNDER_REVIEW request (admin oversight - broadest access)
+        { status: "UNDER_REVIEW", l1Status: "APPROVED" }
+      ];
+      console.log('[getPendingApprovals] Admin L2 filter (includes all UNDER_REVIEW):', JSON.stringify(filter, null, 2));
+    } else {
+      // Regular HR Manager - assigned requests and fallback
+      filter.$or = [
+        { l2ApproverId: user.userId, l1Status: "APPROVED", l2Status: { $in: ["PENDING", null] } },
+        { l2ApproverId: null, l1Status: "APPROVED", status: "UNDER_REVIEW" }
+      ];
+      console.log('[getPendingApprovals] L2 filter:', JSON.stringify(filter, null, 2));
+    }
   } else if (isReportingManager) {
     // L1 (Reporting Manager) only sees requests pending L1 approval
     console.log('[getPendingApprovals] User is Reporting Manager, setting L1 filter');
@@ -1185,24 +1583,34 @@ exports.cancelLeaveRequest = async (id, user) => {
 
   for (const approver of notifyApprovers) {
     if (approver?._id) {
-      sendNotification({
-        type:          "LEAVE_CANCELLED",
-        userId:        approver._id,
-        org_id:        request.org_id,
-        unit_id:       request.unit_id,
-        referenceId:   request._id,
-        referenceType: "LeaveRequest",
-        data: {
-          employeeName: employee?.name || user.name || "Employee",
-          leaveType:    leaveTypeName,
-          startDate:    fmtDate(request.startDate),
-          endDate:      fmtDate(request.endDate),
-          totalDays:    request.totalDays,
-          leaveId:      request._id.toString(),
-        },
-        inApp:  true,
-        push:   false   // Informational only
-      }).catch((err) => console.error("[cancelLeaveRequest] Notification failed:", err.message));
+      try {
+        const notifResult = await sendNotification({
+          type:          "LEAVE_CANCELLED",
+          userId:        approver._id,
+          org_id:        request.org_id,
+          unit_id:       request.unit_id,
+          referenceId:   request._id,
+          referenceType: "LeaveRequest",
+          data: {
+            employeeName: employee?.name || user.name || "Employee",
+            leaveType:    leaveTypeName,
+            startDate:    fmtDate(request.startDate),
+            endDate:      fmtDate(request.endDate),
+            totalDays:    request.totalDays,
+            leaveId:      request._id.toString(),
+          },
+          inApp:  true,
+          push:   false   // Informational only
+        });
+        
+        if (notifResult?.inApp?.success) {
+          console.log(`[cancelLeaveRequest] ✅ Notification sent to approver ${approver._id}`);
+        } else {
+          console.error(`[cancelLeaveRequest] ⚠️ Notification failed:`, JSON.stringify(notifResult, null, 2));
+        }
+      } catch (err) {
+        console.error("[cancelLeaveRequest] Notification exception:", err.message);
+      }
     }
   }
 

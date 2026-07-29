@@ -1,6 +1,7 @@
 // modules/company/company.controller.js
 
 const companyService = require("./company.service");
+const AppError = require("../../utils/appError");
 
 exports.createCompany = async (req, res, next) => {
   try {
@@ -35,4 +36,39 @@ exports.deleteCompany = async (req, res, next) => {
     const result = await companyService.deleteCompany(req.params.id, req.user);
     return res.status(200).json({ success: true, ...result });
   } catch (err) { next(err); }
+};
+
+// ─── POST /api/v1/company/logo (Upload) ─────────────────────
+exports.uploadLogo = async (req, res, next) => {
+  try {
+    if (!req.user.company_id) {
+      return next(new AppError("Company ID not found in user context", 400));
+    }
+
+    if (!req.file) {
+      return next(new AppError("No file uploaded", 400));
+    }
+
+    // File uploaded to Cloudinary via multer middleware
+    const logoUrl = req.file.path; // Cloudinary URL
+
+    const Company = require("./models/company.model");
+    const company = await Company.findByIdAndUpdate(
+      req.user.company_id,
+      { logo_url: logoUrl },
+      { new: true }
+    ).select("logo_url");
+
+    if (!company) {
+      return next(new AppError("Company not found", 404));
+    }
+
+    res.json({
+      success: true,
+      message: "Company logo uploaded successfully",
+      data: { logo_url: company.logo_url },
+    });
+  } catch (err) {
+    next(err);
+  }
 };

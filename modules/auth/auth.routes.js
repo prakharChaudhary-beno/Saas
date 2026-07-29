@@ -56,6 +56,12 @@ const resetPasswordSchema = require("../../validations/auth.validations").resetP
 const setPasswordController = require("./auth.setPassword.controller");
 router.post("/set-password", authenticate, setPasswordController.setPassword);
 
+// ─── Change Password (authenticated user) ──────────────────────
+// Body: { currentPassword: string, newPassword: string }
+const changePasswordController = require("./auth.changePassword.controller");
+const { changePasswordSchema } = require("../../validations/auth.validations");
+router.post("/change-password", authenticate, validate(changePasswordSchema), changePasswordController.changePassword);
+
 // Company details submit — naye user ke liye
 router.post("/complete-registration", authController.completeRegistration);
 

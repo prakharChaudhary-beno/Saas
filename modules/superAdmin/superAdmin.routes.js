@@ -6,7 +6,15 @@ const { superAdminGuard } = require("../../middlewares/superAdminGuard.middlewar
 const validate            = require("../../middlewares/validate.middleware");
 const ctrl                = require("./superAdmin.controller");
 const customerAuthenticate = require("../../middlewares/customerAuthenticate.middleware"); // ← no destructuring
-const { tenantListSchema, planOverrideSchema, auditLogQuerySchema, createCustomerSchema, createOrgSchema } = require("./superAdmin.validation");
+const { tenantListSchema, planOverrideSchema, auditLogQuerySchema, createCustomerSchema, createOrgSchema, publicRegisterSchema } = require("./superAdmin.validation");
+
+// ── PUBLIC ENDPOINTS (no auth required) ──────────────────────────────────
+// Public registration
+router.post(
+  "/register",
+  validate(publicRegisterSchema),
+  ctrl.publicRegister
+);
 
 // ── Customer org create — superAdminGuard se BAHAR ───────────
 // Yeh route customer token se access hoga
@@ -43,6 +51,9 @@ router.post(
   validate(createCustomerSchema),
   ctrl.createCustomer
 );
+
+// Super Admin approves pending customer
+router.post("/customers/:id/approve", ctrl.approveCustomer);
 
 router.get(
   "/audit-log",

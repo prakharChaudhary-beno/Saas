@@ -49,8 +49,8 @@ exports.getAllTenants = async (query) => {
 
   const [customers, total] = await Promise.all([
     Customer.find(filter)
-      .populate("plan_id", "name")
-      .select("business_name contact_name contact_email contact_phone plan_id status payment_method created_by createdAt")
+      .populate("plan_id", "name package_type features modules seat_limit billing_cycle")
+      .select("business_name contact_name contact_email contact_phone work_email plan_id status payment_method created_by createdAt")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit)),
@@ -124,20 +124,41 @@ exports.getAllTenants = async (query) => {
     subscriptionMap[s.org_id.toString()] = s;
   });
 
+  // Get organization details for each customer
+  const orgDetails = await Organization.find({
+    customer_id: { $in: customerIds },
+    is_deleted: false
+  }).select("customer_id name industry country address status logo_url");
+
+  const orgDetailsMap = {};
+  orgDetails.forEach((o) => {
+    orgDetailsMap[o.customer_id.toString()] = o;
+  });
+
   const data = customers.map((c) => {
     const orgId = customerOrgMap[c._id.toString()];
     const subscription = orgId ? subscriptionMap[orgId.toString()] : null;
+    const orgDetail = orgDetailsMap[c._id.toString()];
 
     return {
       id:                   c._id,
       name:                 c.business_name  || "—",
+      org_name:             orgDetail?.name || c.business_name || "—",
       contactName:          c.contact_name   || "—",
+      contact_email:        c.contact_email,
+      work_email:           c.work_email || null,
       email:                c.contact_email,
       phone:                c.contact_phone  || "—",
       plan:                 c.plan_id?.name || subscription?.plan_snapshot?.name || "—",
       planId:               c.plan_id?._id || null,
-      packageType:          subscription?.plan_snapshot?.package_type || null,
+      planDetails:          c.plan_id || null,
+      packageType:          c.plan_id?.package_type || subscription?.plan_snapshot?.package_type || null,
       status:               c.status,
+      org_status:           orgDetail?.status || null,
+      industry:             orgDetail?.industry || null,
+      country:              orgDetail?.country || null,
+      address:              orgDetail?.address || null,
+      logo_url:             orgDetail?.logo_url || null,
       employeeCount:        orgId ? (countMap[orgId.toString()]  || 0) : 0,
       userCount:            orgId ? (userCountMap[orgId.toString()] || 0) : 0,
       subscriptionStatus:   subscription?.status || null,
@@ -263,22 +284,90 @@ exports.getTenantById = async (tenantId) => {
   let subscriptionData = null;
 
   if (organization) {
-    const [totalEmployees, employeeBreakdown, totalUsers] = await Promise.all([
+    const [
+      totalEmployees, 
+      employeeBreakdown, 
+      allUsers,
+      orgAdmins,
+      companyAdmins,
+      unitAdmins
+    ] = await Promise.all([
+      // Total employees
       Employee.countDocuments({ org_id: organization._id, isDeleted: false }),
       
+      // Employee breakdown by status
       Employee.aggregate([
         { $match: { org_id: organization._id, isDeleted: false } },
         { $group: { _id: "$status", count: { $sum: 1 } } },
       ]),
 
-      User.countDocuments({ org_id: organization._id, is_deleted: false }),
+      // All users
+      User.find({ org_id: organization._id, is_deleted: false })
+        .populate("roleId", "slug level")
+        .select("name email role roleId level company_id unit_id")
+        .lean(),
+
+      // Org admins (role level = org)
+      User.countDocuments({ 
+        org_id: organization._id, 
+        is_deleted: false,
+        level: "org"
+      }),
+
+      // Company admins (role level = company)
+      User.countDocuments({ 
+        org_id: organization._id, 
+        is_deleted: false,
+        level: "company"
+      }),
+
+      // Unit admins (role level = unit)
+      User.countDocuments({ 
+        org_id: organization._id, 
+        is_deleted: false,
+        level: "unit"
+      }),
     ]);
 
     const byStatus = {};
     employeeBreakdown.forEach((e) => { byStatus[e._id] = e.count; });
 
     employeeData = { totalEmployees, byStatus };
-    userData = totalUsers;
+    
+    // Segregate users by level
+    const usersByLevel = {
+      org: allUsers.filter(u => u.level === "org").map(u => ({
+        id: u._id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        level: u.level
+      })),
+      company: allUsers.filter(u => u.level === "company").map(u => ({
+        id: u._id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        level: u.level,
+        companyId: u.company_id
+      })),
+      unit: allUsers.filter(u => u.level === "unit").map(u => ({
+        id: u._id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        level: u.level,
+        unitId: u.unit_id
+      }))
+    };
+
+    userData = {
+      total: allUsers.length,
+      orgAdmins,
+      companyAdmins,
+      unitAdmins,
+      byLevel: usersByLevel
+    };
 
     // Get subscription
     subscriptionData = await Subscription.findOne({
@@ -286,6 +375,17 @@ exports.getTenantById = async (tenantId) => {
       is_active: true
     }).select("status plan_snapshot billing_cycle ends_at createdAt");
   }
+
+  // Build organization object for response
+  const orgData = organization ? {
+    id: organization._id,
+    name: organization.name,
+    slug: organization.slug,
+    email: organization.email,
+    status: organization.status,
+    isActive: organization.is_active,
+    joinedAt: organization.createdAt
+  } : null;
 
   return {
     id:                   customer._id,
@@ -301,11 +401,7 @@ exports.getTenantById = async (tenantId) => {
     gstNumber:            customer.gst_number || null,
     panNumber:            customer.pan_number || null,
     billingAddress:       customer.billing_address || null,
-    organization:         organization ? {
-      id:                 organization._id,
-      name:               organization.name,
-      slug:               organization.slug,
-    } : null,
+    organization:         orgData,
     subscription:         subscriptionData ? {
       status:             subscriptionData.status,
       planName:           subscriptionData.plan_snapshot?.name,
@@ -314,7 +410,13 @@ exports.getTenantById = async (tenantId) => {
     } : null,
     usage: {
       totalEmployees:     employeeData?.totalEmployees || 0,
-      totalUsers:         userData || 0,
+      totalUsers:         userData?.total || 0,
+      usersByLevel:       userData?.byLevel || { org: [], company: [], unit: [] },
+      adminCounts: {
+        org: userData?.orgAdmins || 0,
+        company: userData?.companyAdmins || 0,
+        unit: userData?.unitAdmins || 0
+      },
       byStatus:           employeeData?.byStatus || {},
     },
     created:              customer.created_by,
@@ -371,6 +473,7 @@ exports.overrideTenantPlan = async (tenantId, { planId, reason }, adminEmail, ip
   await AuditLog.create({
     actorEmail:     adminEmail,
     action:         "PLAN_OVERRIDE",
+    module:         "superAdmin",
     targetTenantId: tenantId,
     details: {
       from:   previousPlanName,
@@ -421,7 +524,8 @@ exports.updateTenantStatus = async (tenantId, { status, reason }, adminEmail, ip
 
   await AuditLog.create({
     actorEmail:     adminEmail,
-    action:         "STATUS_CHANGE",
+    action:         "TENANT_STATUS_CHANGE",
+    module:         "superAdmin",
     targetTenantId: tenantId,
     details: {
       from:   previousStatus,
@@ -489,6 +593,119 @@ exports.getAuditLogs = async (query) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CREATE CUSTOMER — Super Admin creates customer + assigns plan
+// POST /api/v1/super-admin/customers
+// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// PUBLIC REGISTRATION - User self-registers on platform
+// POST /api/v1/auth/register (Public endpoint)
+// Creates Customer (Pending status) + Organization (if approved)
+// ─────────────────────────────────────────────────────────────────────────────
+exports.publicRegister = async (payload) => {
+  const {
+    business_name,
+    contact_name,
+    contact_email,      // Customer email
+    work_email,         // Organization email (can be same as contact_email)
+    same_email,         // Boolean toggle
+    contact_phone,
+    plan_id,
+    country,
+    industry,
+    org_name,           // Organization name
+  } = payload;
+
+  // Validation
+  if (!same_email && !work_email) {
+    throw new AppError("Work email is required when not using same email", 400);
+  }
+
+  const finalWorkEmail = same_email ? contact_email : work_email;
+
+  // Check existing customer
+  const existingCustomer = await Customer.findOne({
+    contact_email: contact_email.toLowerCase().trim(),
+    is_deleted: false,
+  });
+  if (existingCustomer) {
+    throw new AppError("Customer already exists with this email", 409);
+  }
+
+  // Check existing org email
+  const existingOrg = await Organization.findOne({
+    contact_email: finalWorkEmail.toLowerCase().trim(),
+    is_deleted: false,
+  });
+  if (existingOrg) {
+    throw new AppError("Organization already exists with this work email", 409);
+  }
+
+  // Validate plan
+  const plan = await Plan.findOne({ _id: plan_id, status: "Active", is_deleted: false })
+    .populate("modules", "_id slug name");
+  if (!plan) {
+    throw new AppError("Plan not found or inactive", 404);
+  }
+
+  // Create Customer with PENDING status
+  // Frontend sends SWAPPED values:
+  //   - business_name: contact_name (Your Name field)
+  //   - contact_name: org_name (Organization Name field)
+  // User wants these mapped directly:
+  //   - Customer.business_name = person's name
+  //   - Customer.contact_name = organization name
+  const customer = await Customer.create({
+    business_name,  // Person's name (Your Name from frontend)
+    contact_name,   // Organization name from frontend
+    contact_email: contact_email.toLowerCase().trim(),
+    contact_phone: contact_phone || null,
+    country: country || null,
+    industry: industry || null,
+    plan_id: plan._id,
+    work_email: finalWorkEmail.toLowerCase().trim(),
+    same_email: !!same_email,
+    org_name: org_name || business_name,  // Organization name
+    status: "Pending",  // ⚠️ Needs Super Admin approval
+    is_first_login: true,
+    is_deleted: false,
+    created_by: "SELF",  // Self-registered
+  });
+
+  // Send confirmation email to customer (not credentials yet)
+  try {
+    await sendEmail({
+      to: contact_email,
+      subject: "Registration Submitted – Awaiting Approval",
+      html: `
+        <h2>Hello ${business_name},</h2>
+        <p>Thank you for registering with HRMS!</p>
+        <p>Your registration for <strong>${org_name}</strong> has been submitted and is pending approval.</p>
+        <p>Our team will review your application and send you login credentials once approved.</p>
+        <p><strong>Plan Selected:</strong> ${plan.name}</p>
+        <p><strong>Organization Email:</strong> ${finalWorkEmail}</p>
+        <br>
+        <p>Best regards,<br>HRMS Team</p>
+      `,
+    });
+  } catch (e) {
+    console.error("⚠️ Registration confirmation email failed:", e.message);
+  }
+
+  return {
+    message: "Registration submitted successfully. You will receive login credentials after approval.",
+    customer: {
+      id: customer._id,
+      business_name: customer.business_name,
+      contact_name: customer.contact_name,
+      contact_email: customer.contact_email,
+      work_email: finalWorkEmail,
+      status: "Pending",
+      plan_name: plan.name,
+    },
+  };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPER ADMIN CREATES CUSTOMER (Old method for backward compatibility)
 // POST /api/v1/super-admin/customers
 // ─────────────────────────────────────────────────────────────────────────────
 exports.createCustomer = async (payload) => {
@@ -681,6 +898,188 @@ exports.createOrgForCustomer = async (payload, customer) => {
         days_left:     14,
       },
       admin_email: customer.contact_email,
+    };
+
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    if (err.code === 11000) throw new AppError("Duplicate value. Try again.", 409);
+    throw err;
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APPROVE PENDING CUSTOMER - Super Admin approves registration
+// POST /api/v1/super-admin/customers/:id/approve
+// Creates Organization + Sends credentials to work_email
+// ─────────────────────────────────────────────────────────────────────────────
+exports.approvePendingCustomer = async (customerId, adminEmail, ipAddress) => {
+  // Fetch pending customer
+  const customer = await Customer.findOne({
+    _id: customerId,
+    is_deleted: false,
+    status: "Pending"
+  }).populate("plan_id");
+
+  if (!customer) {
+    throw new AppError("Pending customer not found", 404);
+  }
+
+  if (!customer.work_email) {
+    throw new AppError("Customer does not have a work email configured", 400);
+  }
+
+  const plan = await Plan.findOne({ _id: customer.plan_id._id, status: "Active", is_deleted: false })
+    .populate("modules", "_id slug name");
+  
+  if (!plan) {
+    throw new AppError("Plan not found or inactive", 404);
+  }
+
+  const org_name = customer.org_name || customer.business_name;
+  const slug = toSlug(org_name);
+  
+  // Check if org already exists
+  const existingOrg = await Organization.findOne({ slug, is_deleted: false });
+  if (existingOrg) {
+    throw new AppError("Organisation with this name already exists", 409);
+  }
+
+  const orgAdminRole = await Role.findOne({ slug: "org_admin", org_id: null, isSystem: true });
+  if (!orgAdminRole) {
+    throw new AppError("System role org_admin not found. Run seedRoles() first.", 500);
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  let tempPassword;
+
+  try {
+    const now = new Date();
+    const trialEndAt = new Date(+now + 14 * 24 * 60 * 60 * 1000);
+
+    // STEP 1 — Create Organization
+    const [org] = await Organization.create([{
+      customer_id: customer._id,
+      name: org_name,
+      slug,
+      contact_email: customer.work_email,  // ⚠️ Use work_email for org
+      contact_phone: customer.contact_phone || null,
+      industry: customer.industry || null,
+      country: customer.country || null,
+      address: {},
+      status: "Active",
+      is_deleted: false,
+    }], { session });
+
+    // STEP 2 — Create Subscription (14-day trial)
+    const moduleSlugs = plan.modules.map(m => m.slug);
+    await Subscription.create([{
+      org_id: org._id,
+      plan_id: plan._id,
+      plan_snapshot: {
+        name: plan.name,
+        price_monthly: plan.price_monthly,
+        price_annual: plan.price_annual,
+        seat_limit: plan.seat_limit,
+        modules: moduleSlugs,
+        features: plan.features || [],
+        structure_level: plan.structure_level,
+        package_type: plan.package_type,
+      },
+      status: "Trial",
+      billing_cycle: "monthly",
+      starts_at: now,
+      ends_at: trialEndAt,
+      is_active: true,
+    }], { session });
+
+    // STEP 3 — Activate OrgModules
+    if (plan.modules.length) {
+      const orgModuleDocs = plan.modules.map(mod => ({
+        org_id: org._id,
+        module_id: mod._id,
+        is_active: true,
+        activated_at: now,
+      }));
+      await OrgModule.insertMany(orgModuleDocs, { session, ordered: false });
+    }
+
+    // STEP 4 — Create Org Admin User (⚠️ Uses work_email)
+    // Note: business_name now contains person's name (swapped mapping)
+    tempPassword = process.env.NODE_ENV === "development" ? "Test@1234" : generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    await User.create([{
+      org_id: org._id,
+      company_id: null,
+      unit_id: null,
+      name: customer.business_name,  // Person's name
+      email: customer.work_email,  // ⚠️ Send to work_email
+      phone: customer.contact_phone || null,
+      password: hashedPassword,
+      roleId: orgAdminRole._id,
+      role: "org_admin",
+      level: "org",
+      status: "ACTIVE",
+      is_first_login: true,
+      isEmailVerified: true,
+    }], { session });
+
+    // STEP 5 — Update Customer status to Active
+    await Customer.findByIdAndUpdate(customer._id, {
+      status: "Active",
+      approved_at: now,
+      approved_by: adminEmail
+    }, { session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // STEP 6 — Send credentials to work_email
+    try {
+      await sendEmail({
+        to: customer.work_email,
+        subject: "Your HRMS Organisation is Ready — Login Credentials",
+        html: credentialsTemplate({
+          name: customer.business_name,  // Person's name
+          email: customer.work_email,
+          password: tempPassword,
+          companyName: org_name,
+        }),
+      });
+    } catch (e) {
+      console.error("⚠️ Org credentials email failed:", e.message);
+    }
+
+    // Create audit log
+    await AuditLog.create({
+      actorEmail: adminEmail,
+      action:     "CUSTOMER_APPROVED",
+      module:     "superAdmin",
+      targetTenantId: customer._id,
+      details: {
+        business_name: customer.business_name,
+        contact_email: customer.contact_email,
+        work_email: customer.work_email,
+        plan: plan.name,
+      },
+      ipAddress,
+    });
+
+    return {
+      message: "Customer approved. Organization created and credentials sent.",
+      organization: {
+        id: org._id,
+        name: org.name,
+        slug: org.slug,
+        contact_email: org.contact_email,
+        plan: plan.name,
+        trial_ends_at: trialEndAt,
+        days_left: 14,
+      },
+      credentials_sent_to: customer.work_email,
     };
 
   } catch (err) {

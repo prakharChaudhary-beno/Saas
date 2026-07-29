@@ -82,6 +82,11 @@ exports.getAttendance = Joi.object({
     }),
 
   employeeId: objectId.optional(),
+  
+  departmentId: objectId.optional()
+    .messages({
+      "string.pattern.base": "departmentId must be a valid ObjectId",
+    }),
 
   status: Joi.string()
     .valid(

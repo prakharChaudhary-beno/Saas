@@ -19,8 +19,16 @@ const auditLogSchema = new mongoose.Schema(
     action: {
       type: String,
       required: true,
-      enum: ["PLAN_OVERRIDE", "TENANT_SUSPEND", "TENANT_ACTIVATE", "LOGIN"],
+      enum: ["PLAN_OVERRIDE", "TENANT_SUSPEND", "TENANT_ACTIVATE", "TENANT_STATUS_CHANGE", "LOGIN", "STATUS_CHANGE"],
       index: true,
+    },
+
+    // Module where action occurred
+    module: {
+      type: String,
+      required: true,
+      default: "superAdmin",
+      enum: ["superAdmin", "auth"],
     },
 
     // Kis tenant pe

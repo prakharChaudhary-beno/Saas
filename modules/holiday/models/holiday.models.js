@@ -21,6 +21,14 @@ const holidayCalendarSchema = new mongoose.Schema(
       index:    true,
     },
 
+    unit_id: {
+      type:     mongoose.Schema.Types.ObjectId,
+      ref:      "Unit",
+      required: false, // Optional: null = org/company level, ObjectId = unit level
+      index:    true,
+      default:  null,
+    },
+
     // ── Holiday Info ──────────────────────────────────────
     name: {
       type:      String,
@@ -87,9 +95,9 @@ const holidayCalendarSchema = new mongoose.Schema(
 // ── Indexes ───────────────────────────────────────────────
 holidayCalendarSchema.index({ company_id: 1, year: 1, isActive: 1 });
 
-// Unique: same company + same date
+// Unique: same company/unit + same date
 holidayCalendarSchema.index(
-  { company_id: 1, date: 1 },
+  { company_id: 1, unit_id: 1, date: 1 },
   {
     unique: true,
     partialFilterExpression: { isDeleted: false },

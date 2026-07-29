@@ -188,7 +188,7 @@ exports.createEmployee = async (payload, user) => {
 exports.getEmployees = async (user, query) => {
   const {
     page = 1, limit = 10, search,
-    departmentId, designationId, employmentType, status, unit_id
+    departmentId, designationId, employmentType, status, unit_id, employeeId
   } = query;
 
   const filter = {
@@ -196,6 +196,7 @@ exports.getEmployees = async (user, query) => {
     ...buildScopeFilter(user)
   };
 
+  if (employeeId)     filter._id           = employeeId;
   if (departmentId)   filter.departmentId   = departmentId;
   if (designationId)  filter.designationId  = designationId;
   if (employmentType) filter.employmentType = employmentType;

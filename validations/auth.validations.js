@@ -123,6 +123,23 @@ const resetPasswordSchema = Joi.object({
     })
 });
 
+const changePasswordSchema = Joi.object({
+  currentPassword: Joi.string()
+    .required()
+    .messages({
+      "string.empty": "Current password is required"
+    }),
+  newPassword: Joi.string()
+    .min(8)
+    .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>])[A-Za-z\d!@#$%^&*(),.?":{}|<>]{8,}$/)
+    .required()
+    .messages({
+      "string.empty": "New password is required",
+      "string.min": "Password must be at least 8 characters",
+      "string.pattern.base": "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character"
+    })
+});
+
 module.exports = {
   superAdminLoginSchema,
   tenantLoginSchema,
@@ -131,5 +148,6 @@ module.exports = {
   validateRole,
   validateRoleUpdate,
   forgotPasswordSchema,
-  resetPasswordSchema
+  resetPasswordSchema,
+  changePasswordSchema
 };

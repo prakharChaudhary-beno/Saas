@@ -863,43 +863,65 @@ exports.getAllAttendance = async (query, user) => {
     startDate,
     endDate,
     employeeId,
+    departmentId,
     status,
     page  = 1,
     limit = 31,
   } = query;
 
-  const filter = { org_id: user.orgId, company_id: user.companyId };
+  const filter = {
+    org_id: user.orgId,
+    company_id: user.companyId,
+    isDeleted: false,
+  };
+  
   if (user.unitId) filter.unit_id = user.unitId;
 
   // Date range handling
-const moment = require("moment-timezone");
+  const moment = require("moment-timezone");
   const ORG_TZ = "Asia/Kolkata"; // TODO: pull from company config if per-org timezone varies
 
   if (startDate && endDate) {
-    // Interpret startDate/endDate as IST calendar dates (matching how
-    // getTodayDateInOrgTimezone stores the `date` field), then convert
-    // to the equivalent UTC range for the query. Using new Date(str) +
-    // setHours() here was UTC-naive and didn't match how dates are
-    // actually stored, causing "today" to appear under "yesterday".
     const start = moment.tz(`${startDate} 00:00:00`, ORG_TZ).utc().toDate();
     const end   = moment.tz(`${endDate} 23:59:59.999`, ORG_TZ).utc().toDate();
-
     filter.date = { $gte: start, $lte: end };
-
   } else if (month) {
-    // Fallback to month if no date range
     const { start, end } = parseMonth(month);
     filter.date = { $gte: start, $lt: end };
   } else {
-    // Default to current month if nothing provided
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
     filter.date = { $gte: start, $lte: end };
   }
 
-  if (employeeId) filter.employeeId = employeeId;
-  if (status)     filter.status     = status;
+  // Employee-specific filters
+  if (employeeId) {
+    filter.employeeId = employeeId;
+  } else if (departmentId) {
+    // If department filter is applied, find employees in that department first
+    const Employee = require("../employee/models/employee.model");
+    const deptEmployees = await Employee.find({
+      departmentId: departmentId,
+      org_id: user.orgId,
+      isDeleted: false,
+      status: "ACTIVE"
+    }).select("_id");
+    
+    if (deptEmployees.length > 0) {
+      filter.employeeId = { $in: deptEmployees.map(e => e._id) };
+    } else {
+      // No employees in this department - return empty result
+      return {
+        page: Number(page),
+        limit: Number(limit),
+        total: 0,
+        records: [],
+      };
+    }
+  }
+
+  if (status) filter.status = status;
 
   const skip = (page - 1) * limit;
 
@@ -959,42 +981,42 @@ exports.getTeamAttendance = async (query, user) => {
     isDeleted:          false,
   }).select("_id");
 
-  const teamIds = [manager._id, ...teamMembers.map(e => e._id)];
+  let teamIds = [manager._id, ...teamMembers.map(e => e._id)];
 
   // ── 3. Build filter ───────────────────────────────────────────────────────
   const filter = {
     org_id:     user.orgId,
     company_id: user.companyId,
-    employeeId: { $in: teamIds },
+    isDeleted:  false,
   };
 
   // Date range handling
-const moment = require("moment-timezone");
-  const ORG_TZ = "Asia/Kolkata"; // TODO: pull from company config if per-org timezone varies
+  const moment = require("moment-timezone");
+  const ORG_TZ = "Asia/Kolkata";
 
   if (startDate && endDate) {
-    // Interpret startDate/endDate as IST calendar dates (matching how
-    // getTodayDateInOrgTimezone stores the `date` field). Same fix as
-    // getAllAttendance — was UTC-naive before, causing "today" to be
-    // missed or attributed to the wrong day for the team view too.
     const start = moment.tz(`${startDate} 00:00:00`, ORG_TZ).utc().toDate();
     const end   = moment.tz(`${endDate} 23:59:59.999`, ORG_TZ).utc().toDate();
-
     filter.date = { $gte: start, $lte: end };
   } else if (month) {
-    // Fallback to month if no date range
     const { start, end } = parseMonth(month);
     filter.date = { $gte: start, $lt: end };
   } else {
-    // Default to current month if nothing provided
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
     filter.date = { $gte: start, $lte: end };
   }
 
-  if (employeeId) filter.employeeId = employeeId;
-  if (status)     filter.status     = status;
+  // Employee filter (higher priority than team filter)
+  if (employeeId) {
+    filter.employeeId = employeeId;
+  } else {
+    // Default: show all team members
+    filter.employeeId = { $in: teamIds };
+  }
+
+  if (status) filter.status = status;
 
   const skip = (page - 1) * limit;
 

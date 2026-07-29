@@ -384,7 +384,7 @@ exports.forgotPassword = async (email) => {
     { expiresIn: "1h" }
   );
 
-  const resetLink = `${process.env.GOOGLE_FRONTEND_REDIRECT_URI}/reset-password?token=${resetToken}`;
+  const resetLink = `${process.env.GOOGLE_FRONTEND_REDIRECT_URI}/auth/reset-password?token=${resetToken}`;
 
   try {
     await sendEmail({

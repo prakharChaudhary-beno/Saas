@@ -68,3 +68,23 @@ exports.createOrgForCustomer = async (req, res, next) => {
     res.status(201).json({ success: true, message: data.message, data });
   } catch (err) { next(err); }
 };
+
+// Super Admin approves pending customer
+exports.approveCustomer = async (req, res, next) => {
+  try {
+    const data = await service.approvePendingCustomer(
+      req.params.id,
+      req.user.email,
+      req.ip
+    );
+    res.status(200).json({ success: true, message: data.message, data });
+  } catch (err) { next(err); }
+};
+
+// Public registration (no auth required)
+exports.publicRegister = async (req, res, next) => {
+  try {
+    const data = await service.publicRegister(req.body, req.ip);
+    res.status(201).json({ success: true, message: data.message, data });
+  } catch (err) { next(err); }
+};

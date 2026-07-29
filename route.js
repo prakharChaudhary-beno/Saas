@@ -103,4 +103,8 @@ router.use("/policy-versions", policyVersionRoutes);
 // ── Biometric Integration ─────────────────────────────────────────────────
 router.use("/biometric", biometricRoutes);
 
+// ── Global Search ──────────────────────────────────────────────────────────
+const searchRoutes = require("./modules/search/search.routes");
+router.use("/search", searchRoutes);
+
 module.exports = router;

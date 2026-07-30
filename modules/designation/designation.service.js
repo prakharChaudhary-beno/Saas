@@ -2,6 +2,7 @@
 // Designations are unit-level
 
 const Designation = require("./designation.model");
+const Employee     = require("../employee/models/employee.model");
 const AppError    = require("../../utils/appError");
 
 // Scope filter — unit level
@@ -69,6 +70,22 @@ exports.deleteDesignation = async (id, user) => {
   const filter = { _id: id, isDeleted: false, ...buildFilter(user) };
   const designation = await Designation.findOne(filter);
   if (!designation) throw new AppError("Designation not found", 404);
+
+  // Block deletion if any active employee is still assigned to this
+  // designation — deleting it out from under them would orphan their
+  // record / break anything that reads designationId downstream.
+  const assignedCount = await Employee.countDocuments({
+    designationId: id,
+    isDeleted:     false,
+    status:        { $ne: "TERMINATED" },
+  });
+
+  if (assignedCount > 0) {
+    throw new AppError(
+      `Cannot delete designation — ${assignedCount} employee(s) are still assigned to it. Reassign them first.`,
+      409
+    );
+  }
 
   designation.isDeleted = true;
   await designation.save();

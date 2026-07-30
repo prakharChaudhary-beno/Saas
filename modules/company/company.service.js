@@ -154,15 +154,22 @@ const admins = await User.find({
   org_id:     reqUser.orgId,
   company_id: { $in: companyIds },
   roleId:     await Role.findOne({ slug: "company_admin" }).select("_id").then(r => r?._id),
+  status:     "ACTIVE",
   is_deleted: false,
 }).select("name email company_id status").lean();
 
-const adminMap = {};
-admins.forEach(a => { adminMap[String(a.company_id)] = a; });
+// Multiple active admins per company are allowed — group them into an
+// array instead of keeping only the last match.
+const adminsByCompany = {};
+admins.forEach(a => {
+  const key = String(a.company_id);
+  if (!adminsByCompany[key]) adminsByCompany[key] = [];
+  adminsByCompany[key].push(a);
+});
 
 const companiesWithAdmin = companies.map(c => ({
   ...c,
-  admin: adminMap[String(c._id)] || null,
+  admins: adminsByCompany[String(c._id)] || [],
 }));
 
 return {

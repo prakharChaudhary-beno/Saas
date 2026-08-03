@@ -290,3 +290,32 @@ exports.deleteNotification = async (notificationId, user) => {
   await notification.save();
   return { message: "Notification deleted" };
 };
+
+// ─── GET USER NOTIFICATIONS (Admin/HR access) ───────────────
+exports.getUserNotifications = async (targetUserId, query, adminUser) => {
+  const { page = 1, limit = 20 } = query;
+
+  const filter = {
+    userId:    toObjId(targetUserId),
+    org_id:    toObjId(adminUser.orgId),
+    isDeleted: false,
+  };
+
+  const skip  = (Number(page) - 1) * Number(limit);
+  const total = await Notification.countDocuments(filter);
+  const unreadCount = await Notification.countDocuments({ ...filter, isRead: false });
+
+  const notifications = await Notification.find(filter)
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(Number(limit))
+    .lean();
+
+  return {
+    notifications,
+    unreadCount,
+    total,
+    page:       Number(page),
+    totalPages: Math.ceil(total / Number(limit)),
+  };
+};

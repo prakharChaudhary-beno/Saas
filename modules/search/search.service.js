@@ -21,7 +21,7 @@ const getModels = () => ({
   Role: require('../role/role.model'),
   Permission: require('../permission/permission.model'),
   Shift: require('../shift/models/shift.model'),
-  Roster: require('../roster/models/roster.model'),
+  Roster: require('../shift/models/roster.model'),
 })
 
 // ─── Permission Gate ───────────────────────────────────────────────────────

@@ -263,7 +263,32 @@ exports.updateEmployeeSchema = Joi.object({
     name:     Joi.string().optional(),
     phone:    Joi.string().optional(),
     relation: Joi.string().optional()
-  }).optional()
+  }).optional(),
+
+  // ─── Education ─────────────────────────────────────────────────────────────
+  education: Joi.array().items(Joi.object({
+    institution: Joi.string().trim().optional(),
+    degree:      Joi.string().trim().optional(),
+    from:        Joi.date().optional(),
+    to:          Joi.date().optional()
+  })).optional(),
+
+  // ─── Work Experience ───────────────────────────────────────────────────────
+  experience: Joi.array().items(Joi.object({
+    company: Joi.string().trim().optional(),
+    role:    Joi.string().trim().optional(),
+    from:    Joi.date().optional(),
+    to:      Joi.date().optional(),
+    current: Joi.boolean().optional()
+  })).optional(),
+
+  // ─── Family Details ───────────────────────────────────────────────────────
+  familyDetails: Joi.array().items(Joi.object({
+    name:        Joi.string().trim().optional(),
+    relation:    Joi.string().trim().optional(),
+    dateOfBirth: Joi.date().optional(),
+    phone:       Joi.string().optional()
+  })).optional()
 
 });
 

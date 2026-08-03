@@ -51,6 +51,27 @@ const customerSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // Work email for organization - where credentials will be sent
+    work_email: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      default: null,
+    },
+
+    // Toggle to indicate if contact_email and work_email are same
+    same_email: {
+      type: Boolean,
+      default: true,
+    },
+
+    // Organization name (defaults to business_name if not specified)
+    org_name: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+
     contact_phone: {
       type: String,
       required: [true, "Contact phone is required"],
@@ -120,8 +141,19 @@ const customerSchema = new mongoose.Schema(
     // ─── Status ───────────────────────────────────────────────
     status: {
       type: String,
-      enum: ["Active", "Suspended", "Inactive"],
-      default: "Active",
+      enum: ["Active", "Pending", "Suspended", "Inactive"],
+      default: "Pending",
+    },
+
+    // Super Admin approval metadata
+    approved_at: {
+      type: Date,
+      default: null,
+    },
+
+    approved_by: {
+      type: String, // Super Admin email
+      default: null,
     },
 
     // ─── Auth ─────────────────────────────────────────────────

@@ -7,24 +7,11 @@ const AppError = require("../utils/appError");
 // ─────────────────────────────────────────
 // Checks:
 //   1. role === "SUPER_ADMIN" (JWT se)
-//   2. IP allowlist (production mein .env se)
 // ─────────────────────────────────────────
-
-// Client IP extract — proxy ke peeche bhi kaam kare
-const getClientIp = (req) =>
-  req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
-  req.socket.remoteAddress;
-
-// .env se allowed IPs parse karo
-// SUPER_ADMIN_ALLOWED_IPS=127.0.0.1,::1,103.21.0.1
-const getAllowedIps = () => {
-  const raw = process.env.SUPER_ADMIN_ALLOWED_IPS || "";
-  return raw.split(",").map((ip) => ip.trim()).filter(Boolean);
-};
 
 exports.superAdminGuard = (req, res, next) => {
 
-  // ── 1. Role check ─────────────────────
+  // ── Role check ─────────────────────
   if (!req.user || req.user.role !== "SUPER_ADMIN") {
     return next(new AppError("Access restricted", 403));
   }

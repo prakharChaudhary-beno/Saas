@@ -53,6 +53,10 @@ const auditLogSchema = new Schema({
       "LEAVE_POLICY_ACTIVATED", "LEAVE_POLICY_DEACTIVATED",
       "PAYROLL_POLICY_CREATED", "PAYROLL_POLICY_UPDATED",
       "PAYROLL_POLICY_ACTIVATED",
+
+      // Super Admin/Platform Admin
+      "PLAN_OVERRIDE", "TENANT_SUSPEND", "TENANT_ACTIVATE",
+      "TENANT_STATUS_CHANGE", "STATUS_CHANGE", "CUSTOMER_APPROVED",
     ]
   },
 
@@ -62,7 +66,8 @@ const auditLogSchema = new Schema({
     required: true,
     index: true,
     enum: ["auth", "employee", "leave", "attendance", "payroll",
-           "shift", "roster", "role", "delegation", "policy"],
+           "shift", "roster", "role", "delegation", "policy",
+           "superAdmin", "platformAdmin", "customer"],
   },
 
   // ─── Actor (who did it) ──────────────────────────────────────

@@ -28,9 +28,10 @@ exports.createHoliday = async (payload, user) => {
 
   const year = calculateYear(date, yearType);
 
-  // Duplicate check — same company + same date
+  // Duplicate check — same company/unit + same date
   const existing = await HolidayCalendar.findOne({
     company_id: user.companyId,
+    unit_id:    user.unitId || null,
     date:       new Date(date),
     isDeleted:  false,
   });
@@ -41,6 +42,7 @@ exports.createHoliday = async (payload, user) => {
   const holiday = await HolidayCalendar.create({
     org_id:     user.orgId,
     company_id: user.companyId,
+    unit_id:    user.unitId || null, // ✅ Add unit_id if available
     name,
     date:       new Date(date),
     type,
@@ -261,6 +263,7 @@ exports.importHolidays = async (payload, user) => {
       await HolidayCalendar.create({
         org_id:     user.orgId,
         company_id: user.companyId,
+        unit_id:    user.unitId || null, // ✅ Add unit_id if available
         name:       master.name,
         date:       master.date,
         type:       master.type,

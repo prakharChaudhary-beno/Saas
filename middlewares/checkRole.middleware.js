@@ -83,11 +83,12 @@ exports.requireSuperAdmin = (req, res, next) => {
 // ─────────────────────────────────────────────────────────────
 // requireTenantUser
 // UPDATED — tenantId → orgId
-// SUPER_ADMIN ko org routes pe block karo
+// SUPER_ADMIN allowed to access org routes
 // ─────────────────────────────────────────────────────────────
 exports.requireTenantUser = (req, res, next) => {
+  // Super admin can access organisation routes
   if (req.user?.role === "SUPER_ADMIN") {
-    return next(new AppError("Super Admin cannot access organisation routes", 403));
+    return next();
   }
   if (!req.user?.orgId) {
     return next(new AppError("Organisation context missing", 403));

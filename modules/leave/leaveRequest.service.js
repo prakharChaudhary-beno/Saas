@@ -627,13 +627,23 @@ exports.applyLeave = async (payload, user) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.getAllLeaveRequests = async (query, user) => {
-  const { status, employeeId, page = 1, limit = 10 } = query;
+  const { 
+    status, 
+    employeeId, 
+    departmentId,
+    leaveTypeId,
+    startDate,
+    endDate,
+    page = 1, 
+    limit = 10 
+  } = query;
 
   const filter = {
     org_id:     user.orgId,
     company_id: user.companyId,
   };
 
+  // Role-based scope
   if (user.role === "employee" || user.role === "manager") {
     const emp = await Employee.findOne({
       userId:     user.userId,
@@ -644,10 +654,48 @@ exports.getAllLeaveRequests = async (query, user) => {
     if (emp) filter.employeeId = emp._id;
   } else {
     if (user.unitId)  filter.unit_id    = user.unitId;
-    if (employeeId)   filter.employeeId = toObjId(employeeId);
+    
+    // Department filter - find all employees in the department
+    if (departmentId) {
+      const deptEmployees = await Employee.find({ 
+        departmentId: toObjId(departmentId),
+        org_id: user.orgId,
+        company_id: user.companyId,
+        isDeleted: false 
+      }).distinct('_id');
+      
+      if (deptEmployees.length > 0) {
+        filter.employeeId = { $in: deptEmployees };
+      } else {
+        // No employees in this department, return empty result
+        return {
+          requests: [],
+          pagination: { total: 0, page: Number(page), limit: Number(limit), pages: 0 }
+        };
+      }
+    } else if (employeeId) {
+      // Employee filter (only if department not specified)
+      filter.employeeId = toObjId(employeeId);
+    }
   }
 
+  // Status filter
   if (status) filter.status = status;
+
+  // Leave Type filter
+  if (leaveTypeId) {
+    filter.leaveTypeId = toObjId(leaveTypeId);
+  }
+
+  // Date range filter
+  if (startDate && endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
+    filter.startDate = { $gte: start };
+    filter.endDate = { $lte: end };
+  }
 
   const skip  = (Number(page) - 1) * Number(limit);
   const total = await LeaveRequest.countDocuments(filter);

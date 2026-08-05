@@ -2,6 +2,29 @@
 const AppError = require("../utils/appError");
 
 // ─────────────────────────────────────────
+// Helper: Extract client IP from request
+// ─────────────────────────────────────────
+function getClientIp(req) {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
+    req.headers["x-real-ip"] ||
+    req.connection?.remoteAddress ||
+    req.socket?.remoteAddress ||
+    req.connection?.socket?.remoteAddress ||
+    "127.0.0.1"
+  );
+}
+
+// ─────────────────────────────────────────
+// Helper: Get allowed IPs from env
+// ─────────────────────────────────────────
+function getAllowedIps() {
+  const ips = process.env.SUPER_ADMIN_ALLOWED_IPS;
+  if (!ips) return [];
+  return ips.split(",").map(ip => ip.trim()).filter(Boolean);
+}
+
+// ─────────────────────────────────────────
 // Super Admin Guard
 // authenticate ke BAAD lagao
 // ─────────────────────────────────────────

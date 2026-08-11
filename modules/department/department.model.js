@@ -33,6 +33,35 @@ const departmentSchema = new mongoose.Schema(
       trim:     true,
     },
 
+    parentId: {
+      type:     mongoose.Schema.Types.ObjectId,
+      ref:      "Department",
+      default:  null,
+      index:    true,
+    },
+
+    // Department Head - Employee reference (organizational role)
+    departmentHeadId: {
+      type:     mongoose.Schema.Types.ObjectId,
+      ref:      "Employee",
+      default:  null,
+      index:    true,
+    },
+
+    // Department Code (unique identifier)
+    departmentCode: {
+      type:     String,
+      trim:     true,
+      default:  null,
+      sparse:   true,
+    },
+
+    description: {
+      type:    String,
+      trim:    true,
+      default: "",
+    },
+
     status: {
       type:    String,
       enum:    ["active", "inactive"],

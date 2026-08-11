@@ -296,4 +296,10 @@ router.patch("/:id/status",   authenticate,
   checkPermission("employee.update"),
   employeeController.changeStatus
 );
+
+// ── Employee Timeline ────────────────────────────────────────────────────────
+// GET /api/v1/employees/:id/timeline - Career progression timeline
+const timelineRoutes = require("./employeeTimeline.routes");
+router.use("/:id/timeline", timelineRoutes);
+
 module.exports = router;

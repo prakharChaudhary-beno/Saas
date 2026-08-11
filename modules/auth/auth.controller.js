@@ -39,7 +39,43 @@ const AppError = require("../../utils/appError");
   exports.login = async (req, res, next) => {
   try {
     const result = await authService.login(req.body);
-        // ✅ MFA required hai toh alag response
+    
+    // ✅ MANUAL AUDIT LOG - LOGIN
+    // Since req.user doesn't exist during login, we log manually here
+    const AuditLog = require('../../models/auditLog.model');
+    try {
+      await AuditLog.create({
+        action: 'LOGIN',
+        module: 'auth',
+        actor: {
+          userId: result.user?._id || result._id,
+          name: result.user?.name,
+          role: result.user?.role?.slug || result.user?.role || 'unknown',
+          email: result.user?.email || req.body.email
+        },
+        target: {
+          type: 'User',
+          id: result.user?._id || result._id,
+          name: result.user?.name,
+          email: result.user?.email || req.body.email,
+          employeeId: result.user?.employeeId
+        },
+        metadata: {
+          loginMethod: 'email',
+          ip: req.ip || req.connection.remoteAddress,
+          userAgent: req.get('user-agent'),
+          mfaUsed: result.mfaRequired || false
+        },
+        org_id: result.user?.org_id || result.user?.orgId,
+        company_id: result.user?.company_id || result.user?.companyId,
+        unit_id: result.user?.unit_id || result.user?.unitId
+      });
+      console.log('[AuthAudit] LOGIN logged for:', result.user?.email || req.body.email);
+    } catch (auditError) {
+      console.error('[AuthAudit] Failed to log LOGIN:', auditError.message);
+    }
+    
+    // ✅ MFA required hai toh alag response
     if (result.mfaRequired) {
       return res.status(200).json({
         success:     true,
@@ -53,6 +89,37 @@ const AppError = require("../../utils/appError");
       data: result
     });
   } catch (error) {
+    // ✅ LOG FAILED LOGIN ATTEMPT
+    if (error.message?.includes('Invalid credentials') || error.message?.includes('password')) {
+      const AuditLog = require('../../models/auditLog.model');
+      try {
+        await AuditLog.create({
+          action: 'LOGIN_FAILED',
+          module: 'auth',
+          actor: {
+            userId: null,
+            name: null,
+            role: null,
+            email: req.body.email
+          },
+          target: {
+            type: 'User',
+            email: req.body.email
+          },
+          metadata: {
+            reason: error.message,
+            ip: req.ip || req.connection.remoteAddress,
+            userAgent: req.get('user-agent')
+          },
+          org_id: null,
+          company_id: null,
+          unit_id: null
+        });
+        console.log('[AuthAudit] LOGIN_FAILED logged for:', req.body.email);
+      } catch (auditErr) {
+        console.error('[AuthAudit] Failed to log LOGIN_FAILED:', auditErr.message);
+      }
+    }
     next(error);
   }
 };
@@ -109,6 +176,34 @@ exports.googleCallback = async (req, res, next) => {
       process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
+
+    // ✅ MANUAL AUDIT LOG - GOOGLE LOGIN
+    const AuditLog = require('../../models/auditLog.model');
+    try {
+      await AuditLog.create({
+        action: 'GOOGLE_LOGIN',
+        module: 'auth',
+        userId: user._id,
+        target: {
+          type: 'User',
+          id: user._id,
+          email: user.email,
+          name: `${user.firstName || ''} ${user.lastName || ''}`.trim()
+        },
+        metadata: {
+          loginMethod: 'google',
+          googleId: googleUser.googleId,
+          ip: req.ip || req.connection.remoteAddress,
+          userAgent: req.get('user-agent')
+        },
+        org_id: user.org_id,
+        company_id: user.company_id,
+        unit_id: user.unit_id
+      });
+      console.log('[AuthAudit] GOOGLE_LOGIN logged for:', user.email);
+    } catch (auditError) {
+      console.error('[AuthAudit] Failed to log GOOGLE_LOGIN:', auditError.message);
+    }
 
     const daysLeft = tenant ? Math.ceil(
       (new Date(tenant.trialEndsAt) - new Date()) / (1000 * 60 * 60 * 24)

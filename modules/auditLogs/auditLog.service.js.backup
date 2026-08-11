@@ -220,7 +220,7 @@ exports.getLogs = async (query, user) => {
   const total = await AuditLog.countDocuments(filter);
   const logs  = await AuditLog.find(filter)
     .populate("org_id", "name")
-    .populate("company_id", "company_name brand_name")
+    .populate("company_id", "name")
     .populate("unit_id", "name")
     // Populate actor.userId (correct structure)
     .populate({
@@ -254,40 +254,24 @@ exports.getLogs = async (query, user) => {
     .limit(Number(limit))
     .lean();
 
-  // Enrich with employee profile photos
-  const employeeMap = await enrichWithEmployeeData(logs);
-  
   // Format logs for better UX with detailed user information
   // Handles three cases:
   // 1. actor.userId exists (correct structure for new logs)
   // 2. userId at root level exists (legacy LOGIN logs)
   // 3. target.id exists (fallback for LOGIN where actor = target)
   const formattedLogs = logs.map(log => {
-    // Get the best available user reference and extract userId string
+    // Get the best available user reference
     const userRef = log.actor?.userId || log.userId || log.target?.id;
     const userObj = userRef?._id ? userRef : null;
-    
-    // Get userId string for employee lookup
-    const userIdStr = log.actor?.userId?._id?.toString() || 
-                       log.actor?.userId?.toString() ||
-                       log.userId?._id?.toString() || 
-                       log.userId?.toString() ||
-                       log.target?.id?._id?.toString() ||
-                       log.target?.id?.toString();
-    const employeeData = userIdStr ? employeeMap[userIdStr] : null;
-    
-    // Get target userId string for employee lookup
-    const targetIdStr = log.target?.id?._id?.toString() || log.target?.id?.toString();
-    const targetEmployeeData = targetIdStr ? employeeMap[targetIdStr] : null;
     
     // Format target to show readable info instead of MongoDB ID
     const targetDisplay = log.target?.id ? {
       type: log.target.type,
       id: log.target.id._id || log.target.id,
-      name: targetEmployeeData?.name || log.target.id.name || log.target.name || 'Unknown',
-      email: targetEmployeeData?.email || log.target.id.email || log.target.email || 'N/A',
-      employeeId: targetEmployeeData?.employeeId || log.target.id.employeeId || log.target.employeeId || 'N/A',
-      profilePhoto: targetEmployeeData?.profilePhoto || log.target.id.profilePhoto || null
+      name: log.target.id.name || log.target.name || 'Unknown',
+      email: log.target.id.email || log.target.email || 'N/A',
+      employeeId: log.target.id.employeeId || log.target.employeeId || 'N/A',
+      profilePhoto: log.target.id.profilePhoto || null
     } : log.target?.name ? {
       type: log.target.type,
       id: log.target.id,
@@ -295,14 +279,14 @@ exports.getLogs = async (query, user) => {
       email: log.target.email || 'N/A',
       employeeId: log.target.employeeId || 'N/A',
       profilePhoto: null
-    } : { type: 'Unknown', id: null, name: 'Unknown', email: 'N/A', employeeId: 'N/A', profilePhoto: null };
+    } : null;
     
     return {
       ...log,
       user: {
         id: userObj?._id || log.actor?.userId || log.userId || log.target?.id,
-        name: employeeData?.name || userObj?.name || log.actor?.name || log.target?.name || 'Unknown User',
-        email: employeeData?.email || userObj?.email || log.actor?.email || log.target?.email || 'N/A',
+        name: userObj?.name || log.actor?.name || log.target?.name || 'Unknown User',
+        email: userObj?.email || log.actor?.email || log.target?.email || 'N/A',
         role: userObj?.roleId ? {
           name: userObj.roleId.name,
           slug: userObj.roleId.slug,
@@ -312,7 +296,7 @@ exports.getLogs = async (query, user) => {
           slug: (log.actor?.role)?.toLowerCase().replace(/\s+/g, '_') || 'unknown',
           level: 'unit'
         },
-        profilePhoto: employeeData?.profilePhoto || userObj?.profilePhoto || log.actor?.userId?.profilePhoto || null
+        profilePhoto: userObj?.profilePhoto || log.actor?.userId?.profilePhoto || null
       },
       target: targetDisplay,
       organization: {
@@ -321,7 +305,7 @@ exports.getLogs = async (query, user) => {
       },
       company: {
         id: log.company_id?._id || log.company_id,
-        name: log.company_id?.company_name || log.company_id?.brand_name || 'N/A'
+        name: log.company_id?.name || 'N/A'
       },
       unit: {
         id: log.unit_id?._id || log.unit_id,
@@ -350,18 +334,18 @@ exports.getLogs = async (query, user) => {
     // Get companies based on user role
     let companies = [];
     if (user.role === 'SUPER_ADMIN' || user.role === 'super_admin' || user.role === 'platform_admin') {
-      companies = await Company.find({}, '_id company_name brand_name org_id').lean();
+      companies = await Company.find({}, '_id name org_id').lean();
     } else if (user.role === 'org_admin' || user.role === 'org_head' || user.role === 'org_auditor') {
-      companies = await Company.find({ org_id: toObjId(user.orgId) }, '_id company_name brand_name org_id').lean();
+      companies = await Company.find({ org_id: toObjId(user.orgId) }, '_id name org_id').lean();
     } else if (user.role === 'company_admin' || user.role === 'company_hr_manager') {
-      companies = await Company.find({ _id: toObjId(user.companyId) }, '_id company_name brand_name org_id').lean();
+      companies = await Company.find({ _id: toObjId(user.companyId) }, '_id name org_id').lean();
     } else if (user.role === 'unit_admin' || user.role === 'hr_manager') {
       if (user.companyId) {
-        companies = await Company.find({ _id: toObjId(user.companyId) }, '_id company_name brand_name org_id').lean();
+        companies = await Company.find({ _id: toObjId(user.companyId) }, '_id name org_id').lean();
       }
     } else if (user.companyId) {
       // Fallback - user's company
-      companies = await Company.find({ _id: toObjId(user.companyId) }, '_id company_name brand_name org_id').lean();
+      companies = await Company.find({ _id: toObjId(user.companyId) }, '_id name org_id').lean();
     }
     dropdownFilters.companies = companies;
     
@@ -525,7 +509,7 @@ exports.getHREmployeeLogs = async (query, user) => {
   const total = await AuditLog.countDocuments(filter);
   const logs  = await AuditLog.find(filter)
     .populate("org_id", "name")
-    .populate("company_id", "company_name brand_name")
+    .populate("company_id", "name")
     .populate("unit_id", "name")
     // Populate actor.userId (correct structure)
     .populate({
@@ -564,36 +548,19 @@ exports.getHREmployeeLogs = async (query, user) => {
   // 1. actor.userId exists (correct structure for new logs)
   // 2. userId at root level exists (legacy LOGIN logs)
   // 3. target.id exists (fallback for LOGIN where actor = target)
-  
-  // Enrich with employee profile photos
-  const employeeMap = await enrichWithEmployeeData(logs);
-  
   const formattedLogs = logs.map(log => {
-    // Get the best available user reference and extract userId string
+    // Get the best available user reference
     const userRef = log.actor?.userId || log.userId || log.target?.id;
     const userObj = userRef?._id ? userRef : null;
-    
-    // Get userId string for employee lookup
-    const userIdStr = log.actor?.userId?._id?.toString() || 
-                       log.actor?.userId?.toString() ||
-                       log.userId?._id?.toString() || 
-                       log.userId?.toString() ||
-                       log.target?.id?._id?.toString() ||
-                       log.target?.id?.toString();
-    const employeeData = userIdStr ? employeeMap[userIdStr] : null;
-    
-    // Get target userId string for employee lookup
-    const targetIdStr = log.target?.id?._id?.toString() || log.target?.id?.toString();
-    const targetEmployeeData = targetIdStr ? employeeMap[targetIdStr] : null;
     
     // Format target to show readable info instead of MongoDB ID
     const targetDisplay = log.target?.id ? {
       type: log.target.type,
       id: log.target.id._id || log.target.id,
-      name: targetEmployeeData?.name || log.target.id.name || log.target.name || 'Unknown',
-      email: targetEmployeeData?.email || log.target.id.email || log.target.email || 'N/A',
-      employeeId: targetEmployeeData?.employeeId || log.target.id.employeeId || log.target.employeeId || 'N/A',
-      profilePhoto: targetEmployeeData?.profilePhoto || log.target.id.profilePhoto || null
+      name: log.target.id.name || log.target.name || 'Unknown',
+      email: log.target.id.email || log.target.email || 'N/A',
+      employeeId: log.target.id.employeeId || log.target.employeeId || 'N/A',
+      profilePhoto: log.target.id.profilePhoto || null
     } : log.target?.name ? {
       type: log.target.type,
       id: log.target.id,
@@ -601,14 +568,14 @@ exports.getHREmployeeLogs = async (query, user) => {
       email: log.target.email || 'N/A',
       employeeId: log.target.employeeId || 'N/A',
       profilePhoto: null
-    } : { type: 'Unknown', id: null, name: 'Unknown', email: 'N/A', employeeId: 'N/A', profilePhoto: null };
+    } : null;
     
     return {
       ...log,
       user: {
         id: userObj?._id || log.actor?.userId || log.userId || log.target?.id,
-        name: employeeData?.name || userObj?.name || log.actor?.name || log.target?.name || 'Unknown User',
-        email: employeeData?.email || userObj?.email || log.actor?.email || log.target?.email || 'N/A',
+        name: userObj?.name || log.actor?.name || log.target?.name || 'Unknown User',
+        email: userObj?.email || log.actor?.email || log.target?.email || 'N/A',
         role: userObj?.roleId ? {
           name: userObj.roleId.name,
           slug: userObj.roleId.slug,
@@ -618,7 +585,7 @@ exports.getHREmployeeLogs = async (query, user) => {
           slug: (log.actor?.role)?.toLowerCase().replace(/\s+/g, '_') || 'unknown',
           level: 'unit'
         },
-        profilePhoto: employeeData?.profilePhoto || userObj?.profilePhoto || log.actor?.userId?.profilePhoto || null
+        profilePhoto: userObj?.profilePhoto || log.actor?.userId?.profilePhoto || null
       },
       target: targetDisplay,
       organization: {
@@ -627,7 +594,7 @@ exports.getHREmployeeLogs = async (query, user) => {
       },
       company: {
         id: log.company_id?._id || log.company_id,
-        name: log.company_id?.company_name || log.company_id?.brand_name || 'N/A'
+        name: log.company_id?.name || 'N/A'
       },
       unit: {
         id: log.unit_id?._id || log.unit_id,

@@ -11,6 +11,7 @@ const designationRoutes = require("./modules/designation/designation.route");
 const permissionRoutes  = require("./modules/permission/permission.routes");
 const employeeRoutes    = require("./modules/employee/employee.routes");
 const mfaRoutes         = require("./modules/auth/MFA/auth.mfa.routes");
+const ssoRoutes         = require("./modules/auth/SSO/auth.sso.routes");
 const leaveRoutes       = require("./modules/leave/leave.route");
 const planRoutes        = require("./modules/plan/plan.route");
 const companyRoutes     = require("./modules/company/company.route");
@@ -51,6 +52,7 @@ const biometricRoutes           = require("./modules/biometric/biometric.routes"
 
 router.use("/auth",         authRoutes);
 router.use("/auth/mfa",     mfaRoutes);
+router.use("/auth/sso",     ssoRoutes);
 router.use("/tenant",       tenantRoutes);
 router.use("/roles",        roleRoutes);
 router.use("/permissions",  permissionRoutes);

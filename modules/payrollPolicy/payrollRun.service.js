@@ -30,11 +30,22 @@ const parseMonth = (monthStr) => {
 const daysInMonth = (year, month) => new Date(year, month, 0).getDate();
 
 // ─── Working days in month (Mon-Fri) ─────────────────────────
-const workingDaysInMonth = (year, month, workDays = ["MON","TUE","WED","THU","FRI"]) => {
+// Optional: fromDate parameter to count working days from a specific date onwards
+const workingDaysInMonth = (year, month, workDays = ["MON","TUE","WED","THU","FRI"], fromDate = null) => {
   const dayMap = { 0: "SUN", 1: "MON", 2: "TUE", 3: "WED", 4: "THU", 5: "FRI", 6: "SAT" };
   const total  = daysInMonth(year, month);
   let count = 0;
-  for (let d = 1; d <= total; d++) {
+  
+  // Determine start day of counting
+  let startDay = 1;
+  if (fromDate) {
+    const fromObj = new Date(fromDate);
+    if (fromObj.getFullYear() === year && fromObj.getMonth() + 1 === month) {
+      startDay = fromObj.getDate();
+    }
+  }
+  
+  for (let d = startDay; d <= total; d++) {
     const dayName = dayMap[new Date(year, month - 1, d).getDay()];
     if (workDays.includes(dayName)) count++;
   }
@@ -75,15 +86,37 @@ const calculateForEmployee = async (employee, company_id, unit_id, year, month, 
   const daysPresent  = att.present + att.halfDay + att.onLeave + att.holiday;
   const lopDays      = Math.max(0, totalWorkingDays - daysPresent);
 
+  console.log(`[PAYROLL] ${employee.name} ATTENDANCE:`, {
+    totalWorkingDays,
+    daysPresent,
+    lopDays,
+    present: att.present,
+    halfDay: att.halfDay,
+    onLeave: att.onLeave,
+    holiday: att.holiday
+  });
+
   // ── Pro-rata (mid-month joiners/exiters) ─────────────────────
   let proRataFactor = 1;
+  let proRataReason = '';
+  let eligibleWorkingDays = totalWorkingDays;
+  
   if (employee.joiningDate) {
     const joinDate = new Date(employee.joiningDate);
     if (joinDate > start && joinDate <= end) {
-      // Joined mid-month
-      const daysFromJoin = totalWorkingDays - (workingDaysInMonth(year, month, config?.workWeek) -
-        workingDaysInMonth(year, month, config?.workWeek, joinDate));
-      proRataFactor = daysPresent / totalWorkingDays;
+      // Joined mid-month - calculate eligible working days from joining date
+      const workingDaysFromJoin = workingDaysInMonth(year, month, config?.workWeek, joinDate);
+      proRataFactor = workingDaysFromJoin / totalWorkingDays;
+      proRataReason = `Mid-month joiner: ${joinDate.toISOString().split('T')[0]}`;
+      eligibleWorkingDays = workingDaysFromJoin;
+      console.log(`[PAYROLL] ${employee.name} PRO-RATA:`, {
+        joinDate: joinDate.toISOString().split('T')[0],
+        workingDaysFromJoin,
+        totalWorkingDays,
+        proRataFactor: proRataFactor.toFixed(4),
+        daysPresent,
+        lopDays
+      });
     }
   }
 
@@ -98,41 +131,60 @@ const calculateForEmployee = async (employee, company_id, unit_id, year, month, 
   // Policy lop config: enabled, calculation ("per_day"/"per_hour"), perDayFormula, roundingRule
   const lopConfig = policy?.lop || {};
   const grossEarnings = basic + hra + travel + medical + special;
-  const effectiveWorkingDays = totalWorkingDays > 0 ? totalWorkingDays : 1;
   
-  let dailySalary = 0;
+  // Get calendar days for the month
+  const calendarDays = new Date(year, month, 0).getDate(); // e.g., 31 for July
   
-  // Apply policy's perDayFormula for LOP calculation
+  // Determine divisor based on perDayFormula
+  let lopDivisorDays = 0;
+  let formulaUsed = lopConfig.perDayFormula || 'monthly_salary/working_days';
+  
   switch (lopConfig.perDayFormula) {
-    case "basic_only":
-      dailySalary = basic / effectiveWorkingDays;
+    case 'monthly_salary/calendar_days':
+      lopDivisorDays = calendarDays;
       break;
-    case "basic_hra":
-      dailySalary = (basic + hra) / effectiveWorkingDays;
+    case 'monthly_salary/working_days':
+      // IMPORTANT: For pro-rata employees, use eligible working days, not total working days
+      lopDivisorDays = eligibleWorkingDays;
       break;
-    case "gross_less_overtime":
-      dailySalary = grossEarnings / effectiveWorkingDays;
+    case 'monthly_salary/30':
+      lopDivisorDays = 30;
       break;
-    case "gross_with_overtime":
-      // Will add overtime after it's calculated below
-      dailySalary = grossEarnings / effectiveWorkingDays; // Base, overtime added separately
+    case 'monthly_salary/26':
+      lopDivisorDays = 26;
       break;
     default:
-      // Default: gross (all earnings) / totalWorkingDays
-      dailySalary = grossEarnings / effectiveWorkingDays;
+      // Default to eligible working days for pro-rata employees
+      lopDivisorDays = eligibleWorkingDays > 0 ? eligibleWorkingDays : 26;
   }
+  
+  // Calculate per-day rate
+  const dailySalary = grossEarnings / lopDivisorDays;
+  
+  console.log(`[PAYROLL] ${employee.name} LOP CALC:`, {
+    grossEarnings: grossEarnings.toFixed(2),
+    formulaUsed,
+    lopDivisorDays,
+    dailySalary: dailySalary.toFixed(2),
+    lopDays,
+    lopDeduction: (lopDays * dailySalary).toFixed(2),
+    proRataFactor: proRataFactor.toFixed(4)
+  });
 
   // Apply rounding rule from policy
   let lopDeductionRaw = lopDays * dailySalary;
   let lopDeduction;
   switch (lopConfig.roundingRule) {
-    case "up":
+    case 'ceil':
+    case 'up':
       lopDeduction = Math.ceil(lopDeductionRaw);
       break;
-    case "down":
+    case 'floor':
+    case 'down':
       lopDeduction = Math.floor(lopDeductionRaw);
       break;
-    case "nearest":
+    case 'round':
+    case 'nearest':
       lopDeduction = Math.round(lopDeductionRaw);
       break;
     default:
@@ -140,10 +192,12 @@ const calculateForEmployee = async (employee, company_id, unit_id, year, month, 
   }
 
   // ── Overtime pay ─────────────────────────────────────────────
- const hourlyBasic = basic / 26 / 8; // 26 working days, 8 hours/day
-const overtimePay = policy?.overtimePay?.enabled
-  ? parseFloat(((att.overtimeHours || 0) * (policy.overtimePay.rateMultiplier || 1.5) * hourlyBasic).toFixed(2))
-  : 0;
+  const overtimeMultiplier = policy?.overtimePay?.rateMultiplier || 1.5;
+  const hourlyBasic = basic / 26 / 8; // 26 working days, 8 hours/day
+  const overtimeRate = hourlyBasic; // Base hourly rate before multiplier
+  const overtimePay = policy?.overtimePay?.enabled
+    ? parseFloat(((att.overtimeHours || 0) * overtimeMultiplier * hourlyBasic).toFixed(2))
+    : 0;
 
   // ── Gross salary ─────────────────────────────────────────────
   const grossBeforeLOP = parseFloat((basic + hra + travel + medical + special + overtimePay).toFixed(2));
@@ -323,6 +377,15 @@ if ((esiConfig?.enabled !== false) && grossBeforeLOP < 21000) {
     lopDays:           parseFloat(lopDays.toFixed(2)),
     overtimeHours:     parseFloat((att.overtimeHours || 0).toFixed(2)),
     
+    // LOP calculation details for payslip display
+    lopPerDayRate:     parseFloat(dailySalary.toFixed(2)),
+    lopFormulaUsed:    formulaUsed,
+    lopFormulaDays:    lopDivisorDays,
+    
+    // Overtime calculation details
+    overtimeRate:      parseFloat(overtimeRate.toFixed(2)),
+    overtimeMultiplier: overtimeMultiplier,
+    
     // Employer contributions
     employerContributions: {
       pf:    pfEmployer,
@@ -440,6 +503,17 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
   if (unit_id) filter.unit_id = unit_id;
 
   const employees = await Employee.find(filter).lean();
+  console.log(`[PAYROLL] Found ${employees.length} employees for unit ${unit_id}`);
+  
+  // Log all employees being processed
+  const fs = require('fs');
+  const logFile = '/tmp/payroll_debug.log';
+  fs.writeFileSync(logFile, `PAYROLL RUN: ${year}-${mon}\n`);
+  fs.appendFileSync(logFile, `Employees found: ${employees.length}\n`);
+  employees.forEach(e => {
+    fs.appendFileSync(logFile, `  - ${e.name} (${e.employeeId}) | Status: ${e.status} | Joined: ${e.joiningDate} | Basic: ${e.salary?.basic || 0}\n`);
+  });
+  
   if (!employees.length) throw new AppError("No active employees found", 404);
 
   const config = await CompanyConfig.findOne({ company_id }).lean();
@@ -448,6 +522,9 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
 
   for (const employee of employees) {
     try {
+      console.log(`[PAYROLL] === Processing: ${employee.name} ===`);
+      fs.appendFileSync(logFile, `\nProcessing: ${employee.name}\n`);
+      
       // ── MANDATORY: Payroll policy must exist ─────────────────
       let policy;
       try {
@@ -465,6 +542,8 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
         continue; // Skip this employee, process others
       }
       if (!policy) {
+        console.log(`[PAYROLL] ✗ NO POLICY for ${employee.name}`);
+        fs.appendFileSync(logFile, `  ✗ NO POLICY\n`);
         results.failed++;
         results.errors.push({
           employeeId: employee._id,
@@ -473,16 +552,29 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
         });
         continue;
       }
+      fs.appendFileSync(logFile, `  ✓ Policy found: ${policy.name}\n`);
 
-      const calc = await calculateForEmployee(
-        employee, company_id,
-        employee.unit_id || unit_id,
-        year, mon, policy, config
-      );
+      // ── CALCULATE PAYSLIP ─────────────────────────────────────────
+      console.log(`[PAYROLL] Processing employee: ${employee.name} (${employee.employeeId}), Salary Basic: ${employee.salary?.basic || 0}`);
+      
+      let calc;
+      try {
+        calc = await calculateForEmployee(
+          employee, company_id,
+          employee.unit_id || unit_id,
+          year, mon, policy, config
+        );
+        console.log(`[PAYROLL] ✓ Calculation complete for ${employee.name}: Net Salary = ${calc.netSalary}`);
+      } catch (calcErr) {
+        console.error(`[PAYROLL] ✗ Calculation FAILED for ${employee.name}:`, calcErr.message);
+        throw calcErr;
+      }
 
-      await Payslip.findOneAndUpdate(
-        { employee_id: employee._id, year, month: mon },
-        {
+      // ── SAVE/UPDATE PAYSLIP ───────────────────────────────────────────
+      fs.appendFileSync(logFile, `  Saving payslip: employee_id=${employee._id}, year=${year}, month=${mon}\n`);
+      try {
+        const filter = { employee_id: employee._id, year, month: mon };
+        const update = {
           org_id:      employee.org_id,
           company_id,
           unit_id:     employee.unit_id || unit_id,
@@ -492,14 +584,30 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
           ...calc,
           status:      "DRAFT",
           generatedBy: createdBy,
-        },
-        { upsert: true, new: true }
-      );
-
-      results.processed++;
+        };
+        
+        console.log(`[PAYROLL] Saving payslip for ${employee.name}:`, JSON.stringify(filter));
+        const payslip = await Payslip.findOneAndUpdate(
+          filter,
+          update,
+          { upsert: true, new: true }
+        );
+        console.log(`[PAYROLL] ✓ Payslip saved for ${employee.name} (ID: ${payslip._id})`);
+        fs.appendFileSync(logFile, `  ✓ Payslip saved: ${payslip._id}\n`);
+        results.processed++;
+      } catch (saveErr) {
+        console.error(`[PAYROLL] ✗ FAILED to save payslip for ${employee.name}:`, saveErr.message);
+        throw saveErr;
+      }
     } catch (err) {
+      console.error(`[PAYROLL] ❌ ERROR processing ${employee.name}:`, err);
       results.failed++;
-      results.errors.push({ employeeId: employee._id, name: employee.name, error: err.message });
+      results.errors.push({ 
+        employeeId: employee._id, 
+        name: employee.name, 
+        error: err.message,
+        stack: err.stack
+      });
     }
   }
 

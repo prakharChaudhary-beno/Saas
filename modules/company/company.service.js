@@ -147,29 +147,12 @@ exports.getCompanies = async (reqUser, query = {}) => {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(Number(limit))
+    .populate('admin', 'name email status') // ✅ Populate admin field
     .lean();
-
- const companyIds = companies.map(c => c._id);
-const admins = await User.find({
-  org_id:     reqUser.orgId,
-  company_id: { $in: companyIds },
-  roleId:     await Role.findOne({ slug: "company_admin" }).select("_id").then(r => r?._id),
-  status:     "ACTIVE",
-  is_deleted: false,
-}).select("name email company_id status").lean();
-
-// Multiple active admins per company are allowed — group them into an
-// array instead of keeping only the last match.
-const adminsByCompany = {};
-admins.forEach(a => {
-  const key = String(a.company_id);
-  if (!adminsByCompany[key]) adminsByCompany[key] = [];
-  adminsByCompany[key].push(a);
-});
 
 const companiesWithAdmin = companies.map(c => ({
   ...c,
-  admins: adminsByCompany[String(c._id)] || [],
+  admin: c.admin || null, // ✅ Single admin reference
 }));
 
 return {

@@ -330,7 +330,8 @@ exports.updateEmployee = async (id, data, user) => {
     "name", "phone", "alternatePhone", "dateOfBirth", "gender", "bloodGroup", 
     "maritalStatus", "profilePhoto", "about",
     "currentAddress", "permanentAddress",
-    "emergencyContact"
+    "emergencyContact",
+    "familyDetails", "education", "experience"
   ];
 
   // Fields EMPLOYEES CANNOT update (admin/HR only)

@@ -487,11 +487,12 @@ exports.punchIn = async (data, user, req = null) => {
   const lateMinutes = isLate ? Math.ceil((nowOrgTime - windowValidation.shiftStart) / (1000 * 60)) : 0;
 
   // ── 7. Determine initial status (T-19 + T-20) ────────────────
+  // IMPORTANT: If employee punches in, status reflects attendance, NOT holiday
+  // Holiday status is only for auto-generated records when no one punches in
   let status = "PRESENT";
-  if (holiday)             status = "HOLIDAY";        // T-19
-  else if (approvedLeave)  status = "ON_LEAVE";       // T-20
-  else if (isWFH)          status = "WFH";
-  else if (isLate)         status = "LATE";
+  if (approvedLeave)  status = "ON_LEAVE";       // T-20
+  if (isWFH)          status = "WFH";
+  if (isLate)         status = "LATE";
 
   // ── 8. Create or update record ────────────────────────────────
   const record = await Attendance.findOneAndUpdate(
@@ -1227,7 +1228,10 @@ exports.adminPunchIn = async (data, user) => {
   const unit = employee.unit_id
   
   // ── 2. Get date based on punch time (org timezone midnight) ────
+  // Get the date in org timezone
   const orgPunchTime = new Date(punchDate.toLocaleString('en-US', { timeZone: timezone }))
+  // Create date at UTC midnight on the org date
+  // This ensures all attendance for the same org day have identical dates for querying
   const today = new Date(orgPunchTime)
   today.setUTCHours(0, 0, 0, 0)
   
@@ -1352,10 +1356,11 @@ exports.adminPunchIn = async (data, user) => {
   const lateMinutes = isLate ? Math.ceil((punchDate - new Date(punchDate.toDateString() + ' ' + shiftStart.replace('24:', '00:'))) / (1000 * 60)) : 0
   
   // ── 9. Determine status ──────────────────────────────────────
+  // IMPORTANT: If employee punches in, status reflects attendance, NOT holiday
+  // Holiday status is only for auto-generated records when no one punches in
   let status = 'PRESENT'
-  if (holiday) status = 'HOLIDAY'
-  else if (approvedLeave) status = 'ON_LEAVE'
-  else if (isLate) status = 'LATE'
+  if (approvedLeave) status = 'ON_LEAVE'
+  if (isLate) status = 'LATE'
   
   // ── 10. Create attendance record ─────────────────────────────
   const record = await Attendance.findOneAndUpdate(
@@ -1450,7 +1455,10 @@ exports.adminPunchOut = async (data, user) => {
   const unit = employee.unit_id
   
   // ── 2. Get date based on punch time ───────────────────────────
+  // Get the date in org timezone
   const orgPunchTime = new Date(punchDate.toLocaleString('en-US', { timeZone: timezone }))
+  // Create date at UTC midnight on the org date
+  // This ensures all attendance for the same org day have identical dates for querying
   const today = new Date(orgPunchTime)
   today.setUTCHours(0, 0, 0, 0)
   

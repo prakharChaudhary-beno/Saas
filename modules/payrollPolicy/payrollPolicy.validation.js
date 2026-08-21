@@ -241,8 +241,26 @@ const arrearSchema = Joi.object({
 
 // ─── applicableFor ────────────────────────────────────────────────────────────
 const applicableForSchema = Joi.object({
-  departments:     Joi.array().items(objectId).default([]),
-  designations:    Joi.array().items(objectId).default([]),
+  departments: Joi.array()
+    .items(Joi.alternatives().try(
+      objectId,
+      Joi.object({ _id: objectId.required() }).unknown(true)
+    ))
+    .default([])
+    .custom((val, helpers) => {
+      // Extract _id from objects
+      return val.map(item => typeof item === 'string' ? item : item._id);
+    }),
+  designations: Joi.array()
+    .items(Joi.alternatives().try(
+      objectId,
+      Joi.object({ _id: objectId.required() }).unknown(true)
+    ))
+    .default([])
+    .custom((val, helpers) => {
+      // Extract _id from objects
+      return val.map(item => typeof item === 'string' ? item : item._id);
+    }),
   roles:           Joi.array().items(Joi.string()).default([]),
   locations:       Joi.array().items(Joi.string().trim()).default([]),
   employmentTypes: Joi.array()

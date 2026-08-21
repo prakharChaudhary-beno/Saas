@@ -164,6 +164,15 @@ exports.inviteUser = async (data, currentUser) => {
 
     user = createdUsers[0];
 
+    // ✅ FIX: Update Company's admin field if company_id provided
+    if (company_id) {
+      await Company.updateOne(
+        { _id: company_id },
+        { $set: { admin: user._id } },
+        { session }
+      );
+    }
+
     // ─────────────────────────────────────────────────────────────
     // CREATE EMPLOYEE RECORD FOR USER (HRMS STANDARD)
     // Every user (including admins) needs an Employee record for:
@@ -300,12 +309,20 @@ exports.inviteUser = async (data, currentUser) => {
     }),
   });
 
+  // ✅ Return populated user data for frontend state update
+  const populatedUser = await User.findById(user._id)
+    .populate('roleId', 'name slug level')
+    .populate('company_id', 'company_name logo_url')
+    .populate('unit_id', 'unit_name logo_url')
+    .lean();
+
   return {
     id: user._id,
     email: user.email,
     role: role.name,
     temp_password_sent: true,
     is_first_login: true,
+    user: populatedUser, // ✅ Include full populated user for frontend
   };
 };
 
@@ -519,6 +536,21 @@ exports.updateUser = async (id, data, currentUser) => {
     const currentUserLevelOrder = hierarchy[currentUser.level] || 3;
     const targetLevelOrder = hierarchy[newRole.level] || 3;
     
+    // Get current target user's level
+    const userRole = await Role.findById(user.roleId).select('level').lean();
+    const userCurrentLevel = userRole?.level || 'unit';
+    const userCurrentLevelOrder = hierarchy[userCurrentLevel] || 3;
+    
+    // ── CRITICAL: Cannot edit users at higher level ──
+    if (userCurrentLevelOrder < currentUserLevelOrder) {
+      throw new AppError(`You cannot edit users with ${userCurrentLevel} level (parent hierarchy)`, 403);
+    }
+    
+    // ── CRITICAL: Cannot promote users to parent level ──
+    if (targetLevelOrder < userCurrentLevelOrder) {
+      throw new AppError(`Cannot promote user from ${userCurrentLevel} to ${newRole.level} level (child cannot become parent)`, 403);
+    }
+    
     // Determine allowed target levels - STRICT ISOLATION
     let allowedTargetLevels;
     if (currentUser.level === 'org') {
@@ -537,10 +569,8 @@ exports.updateUser = async (id, data, currentUser) => {
     }
     
     // Can ONLY edit users with roles within allowed levels
-    const userRole = await Role.findById(user.roleId).select('level').lean();
-    
-    if (!allowedTargetLevels.includes(userRole?.level)) {
-      throw new AppError(`You cannot edit users with ${userRole?.level || 'unknown'} level role`, 403);
+    if (!allowedTargetLevels.includes(userCurrentLevel)) {
+      throw new AppError(`You cannot edit users with ${userCurrentLevel || 'unknown'} level role`, 403);
     }
 
     if (newRole && ["company_admin", "unit_admin"].includes(newRole.slug)) {
@@ -644,7 +674,14 @@ exports.updateUser = async (id, data, currentUser) => {
     }
   }
 
-  return user;
+  // ── Return populated user for frontend update ──
+  const updatedUser = await User.findById(user._id)
+    .populate('roleId', 'name slug level')
+    .populate('company_id', 'company_name logo_url')
+    .populate('unit_id', 'unit_name logo_url')
+    .lean();
+
+  return updatedUser;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -676,11 +713,29 @@ exports.getProgressionHistory = async (id, currentUser) => {
 // DELETE /users/:id
 // ─────────────────────────────────────────────────────────────
 exports.deleteUser = async (id, currentUser) => {
+  const scopeFilter = buildScopeFilter(currentUser);
+  
+  console.log('🔍 Delete user request:', {
+    targetUserId: id,
+    currentUser: {
+      userId: currentUser.userId,
+      orgId: currentUser.orgId,
+      companyId: currentUser.companyId,
+      unitId: currentUser.unitId,
+      role: currentUser.role,
+      level: currentUser.level
+    },
+    scopeFilter: scopeFilter
+  });
+  
   const user = await User.findOne({
     _id:       id,
-    ...buildScopeFilter(currentUser),
-    isDeleted: false,
+    ...scopeFilter,
+    is_deleted: false,  // ✅ Fixed: model uses is_deleted, not isDeleted
   });
+  
+  console.log('🔍 User found:', user ? { id: user._id, email: user.email, org_id: user.org_id } : null);
+  
   if (!user) throw new AppError("User not found", 404);
 
   if (user._id.toString() === currentUser.userId) {

@@ -54,6 +54,10 @@ const auditLogSchema = new Schema({
       "PAYROLL_POLICY_CREATED", "PAYROLL_POLICY_UPDATED",
       "PAYROLL_POLICY_ACTIVATED",
 
+      // Department
+      "DEPARTMENT_CREATED", "DEPARTMENT_UPDATED", "DEPARTMENT_DELETED",
+      "DEPARTMENT_HEAD_ASSIGNED", "DEPARTMENT_HEAD_REMOVED",
+
       // Super Admin/Platform Admin
       "PLAN_OVERRIDE", "TENANT_SUSPEND", "TENANT_ACTIVATE",
       "TENANT_STATUS_CHANGE", "STATUS_CHANGE", "CUSTOMER_APPROVED",
@@ -67,7 +71,7 @@ const auditLogSchema = new Schema({
     index: true,
     enum: ["auth", "employee", "leave", "attendance", "payroll",
            "shift", "roster", "role", "delegation", "policy",
-           "superAdmin", "platformAdmin", "customer"],
+           "department", "superAdmin", "platformAdmin", "customer"],
   },
 
   // ─── Actor (who did it) ──────────────────────────────────────
@@ -110,6 +114,7 @@ const auditLogSchema = new Schema({
   timestamps: true,
   toJSON:   { virtuals: true },
   toObject: { virtuals: true },
+  strict: false  // Allow legacy root-level userId field
 });
 
 // Indexes
@@ -118,5 +123,8 @@ auditLogSchema.index({ org_id: 1, module: 1, createdAt: -1 });
 auditLogSchema.index({ org_id: 1, "actor.userId": 1, createdAt: -1 });
 auditLogSchema.index({ org_id: 1, "target.id": 1, createdAt: -1 });
 auditLogSchema.index({ org_id: 1, action: 1, createdAt: -1 });
+
+// Set strictPopulate: false globally for this model to allow population of legacy userId field
+auditLogSchema.set('strictPopulate', false);
 
 module.exports = mongoose.models.AuditLog || mongoose.model("AuditLog", auditLogSchema);

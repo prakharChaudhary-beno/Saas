@@ -174,6 +174,10 @@ exports.createEmployee = async (payload, user) => {
     createdBy:  user.userId
   });
 
+  // ─── Create Joining Timeline Event ──────────────────────────────────────
+  const timelineService = require('./employeeTimeline.service');
+  await timelineService.createJoiningEvent(employee.toObject(), user.userId);
+
   // NOTE: Leave balance seeding removed - balances calculated dynamically from active policy
 
   return await Employee.findById(employee._id)
@@ -239,10 +243,12 @@ exports.getEmployees = async (user, query) => {
 
   const [employees, total] = await Promise.all([
     Employee.find(filter)
+      .populate("org_id",             "name")
+      .populate("company_id",         "company_name")
+      .populate("unit_id",            "name")
       .populate("departmentId",       "name")
       .populate("designationId",      "name")
       .populate("reportingManagerId", "name employeeId profilePhoto")
-      .populate("unit_id",            "name")
       .select(selectFields)  // profilePhoto is included by default
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -324,7 +330,8 @@ exports.updateEmployee = async (id, data, user) => {
     "name", "phone", "alternatePhone", "dateOfBirth", "gender", "bloodGroup", 
     "maritalStatus", "profilePhoto", "about",
     "currentAddress", "permanentAddress",
-    "emergencyContact"
+    "emergencyContact",
+    "familyDetails", "education", "experience"
   ];
 
   // Fields EMPLOYEES CANNOT update (admin/HR only)
@@ -459,6 +466,15 @@ exports.updateEmployee = async (id, data, user) => {
   const salaryFields = ["salary.basic", "salary.hra", "salary.travelAllowance",
                         "salary.medicalAllowance", "salary.specialAllowance", "salary.grossSalary"];
   const oldObj = { salary: employee.salary?.toObject?.() || employee.salary };
+  
+  // ─── Track Timeline Changes ──────────────────────────────────────────────
+  const timelineService = require('./employeeTimeline.service');
+  await timelineService.trackEmployeeChanges(
+    employee._id,
+    employee.toObject(),
+    data,
+    user.userId
+  );
   
   Object.assign(employee, data);
   employee.updatedBy = user.userId;

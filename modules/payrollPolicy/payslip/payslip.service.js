@@ -106,6 +106,8 @@ exports.getAllPayslips = async (query, user) => {
   } = query;
 
   const filter = buildScope(user);
+  console.log('[PAYSLIP SERVICE] User:', user.role, '| unitId:', user.unitId);
+  console.log('[PAYSLIP SERVICE] Filter BEFORE:', JSON.stringify(filter));
 
   // Handle month - can be numeric (7) or date format (YYYY-MM)
   if (month) {
@@ -132,8 +134,11 @@ exports.getAllPayslips = async (query, user) => {
   if (status)     filter.status = status;
   if (employeeId) filter.employee_id = toObjId(employeeId);
 
+  console.log('[PAYSLIP SERVICE] Filter AFTER:', JSON.stringify(filter));
+  
   const skip  = (Number(page) - 1) * Number(limit);
   const total = await Payslip.countDocuments(filter);
+  console.log('[PAYSLIP SERVICE] Total documents found:', total);
 
   const payslips = await Payslip.find(filter)
     .populate("employee_id", "name employeeId email unit_id")

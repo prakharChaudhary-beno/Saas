@@ -47,14 +47,40 @@ exports.getAllTenants = async (query) => {
 
   const skip = (Number(page) - 1) * Number(limit);
 
+  // If search term provided, also search in Organization collection
+  let orgFilterIds = [];
+  if (search) {
+    const matchingOrgs = await Organization.find({
+      name: { $regex: search, $options: "i" },
+      is_deleted: false
+    }).select("customer_id").lean();
+    
+    orgFilterIds = matchingOrgs.map(o => o.customer_id);
+  }
+
+  // Combine Customer search + Organization search results
+  let finalFilter = filter;
+  if (search && orgFilterIds.length > 0) {
+    // Search in Customer fields OR match customer_id from Organization
+    finalFilter = {
+      is_deleted: false,
+      $or: [
+        { business_name:  { $regex: search, $options: "i" } },
+        { contact_email: { $regex: search, $options: "i" } },
+        { contact_name:  { $regex: search, $options: "i" } },
+        { _id: { $in: orgFilterIds } }
+      ]
+    };
+  }
+
   const [customers, total] = await Promise.all([
-    Customer.find(filter)
+    Customer.find(finalFilter)
       .populate("plan_id", "name package_type features modules seat_limit billing_cycle")
       .select("business_name contact_name contact_email contact_phone work_email plan_id status payment_method created_by createdAt")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit)),
-    Customer.countDocuments(filter),
+    Customer.countDocuments(finalFilter),
   ]);
 
   // Get organizations for each customer to count employees/users

@@ -228,6 +228,13 @@ const companySchema = new mongoose.Schema(
       default: false,
     },
 
+    // ─── Responsible Person (Admin) ──────────────────────────
+    admin: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     // ─── Meta ─────────────────────────────────────────────────
     created_by: {
       type: mongoose.Schema.Types.ObjectId,

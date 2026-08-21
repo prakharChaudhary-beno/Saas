@@ -153,6 +153,22 @@ const userSchema = new mongoose.Schema(
 
     refreshTokens: [String],
 
+    // ─── SSO (Single Sign-On) ─────────────────────────────────
+    ssoProfileId: {
+      type: String,
+      default: null,
+    },
+
+    ssoConnectionId: {
+      type: String,
+      default: null,
+    },
+
+    ssoProvider: {
+      type: String,
+      default: null, // e.g., "Okta", "Azure AD", "Google Workspace"
+    },
+
     // ─── MFA ──────────────────────────────────────────────────
     mfaSecret: {
       type: String,
@@ -165,6 +181,11 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
+    mfaEnrolledAt: {
+      type: Date,
+      default: null,
+    },
+
     mfaTempSecret: {
       type: String,
       select: false,
@@ -172,7 +193,11 @@ const userSchema = new mongoose.Schema(
     },
 
     mfaBackupCodes: {
-      type: [String],
+      type: [{
+        codeHash: String,
+        used: { type: Boolean, default: false },
+        usedAt: Date
+      }],
       select: false,
       default: [],
     },

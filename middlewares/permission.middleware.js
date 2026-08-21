@@ -59,6 +59,10 @@ const MODULE_ALIAS = {
   attendancePolicy: "attendance",
   leavePolicy:       "leave",
   payrollPolicy:     "payroll",
+  // Also map lowercase policy names (from permission slugs)
+  attendancepolicy: "attendance",
+  leavepolicy:       "leave",
+  payrollpolicy:     "payroll",
 };
 
 module.exports = (requiredPermission) => {

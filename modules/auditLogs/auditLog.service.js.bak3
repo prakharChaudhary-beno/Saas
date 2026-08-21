@@ -321,7 +321,7 @@ exports.getLogs = async (query, user) => {
       },
       company: {
         id: log.company_id?._id || log.company_id,
-        name: log.company_id?.company_name || log.company_id?.brand_name || 'N/A'
+        name: log.company_id?.name || 'N/A'
       },
       unit: {
         id: log.unit_id?._id || log.unit_id,
@@ -350,18 +350,18 @@ exports.getLogs = async (query, user) => {
     // Get companies based on user role
     let companies = [];
     if (user.role === 'SUPER_ADMIN' || user.role === 'super_admin' || user.role === 'platform_admin') {
-      companies = await Company.find({}, '_id company_name brand_name org_id').lean();
+      companies = await Company.find({}, '_id name org_id').lean();
     } else if (user.role === 'org_admin' || user.role === 'org_head' || user.role === 'org_auditor') {
-      companies = await Company.find({ org_id: toObjId(user.orgId) }, '_id company_name brand_name org_id').lean();
+      companies = await Company.find({ org_id: toObjId(user.orgId) }, '_id name org_id').lean();
     } else if (user.role === 'company_admin' || user.role === 'company_hr_manager') {
-      companies = await Company.find({ _id: toObjId(user.companyId) }, '_id company_name brand_name org_id').lean();
+      companies = await Company.find({ _id: toObjId(user.companyId) }, '_id name org_id').lean();
     } else if (user.role === 'unit_admin' || user.role === 'hr_manager') {
       if (user.companyId) {
-        companies = await Company.find({ _id: toObjId(user.companyId) }, '_id company_name brand_name org_id').lean();
+        companies = await Company.find({ _id: toObjId(user.companyId) }, '_id name org_id').lean();
       }
     } else if (user.companyId) {
       // Fallback - user's company
-      companies = await Company.find({ _id: toObjId(user.companyId) }, '_id company_name brand_name org_id').lean();
+      companies = await Company.find({ _id: toObjId(user.companyId) }, '_id name org_id').lean();
     }
     dropdownFilters.companies = companies;
     
@@ -627,7 +627,7 @@ exports.getHREmployeeLogs = async (query, user) => {
       },
       company: {
         id: log.company_id?._id || log.company_id,
-        name: log.company_id?.company_name || log.company_id?.brand_name || 'N/A'
+        name: log.company_id?.name || 'N/A'
       },
       unit: {
         id: log.unit_id?._id || log.unit_id,

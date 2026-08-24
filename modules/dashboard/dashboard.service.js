@@ -26,25 +26,28 @@ const AuditLog     = require("../superAdmin/models/auditLog.models");
 const Role = require("../role/role.model");
 const CompanyConfig = require("../companyConfig/models/companyConfig.model");
 
+// CRITICAL FIX: Import timezone utility for consistent date handling
+const { getTodayDateInOrgTimezone } = require("../../utils/timezone");
+
 
 const toObjId = (id) => new mongoose.Types.ObjectId(id);
 
 // Create date range based on ORGANIZATION TIMEZONE (not server timezone)
-// Attendance records store date at UTC midnight of the org date
-// e.g., Aug 21 IST stored as 2026-08-21T00:00:00.000Z
+// CRITICAL FIX: Use same date generation method as attendance service
+// Attendance records use getTodayDateInOrgTimezone() which calls moment().tz().startOf('day').toDate()
 const todayRange = (timezone = 'Asia/Kolkata') => {
   const now = moment.tz(timezone);
   console.log('[todayRange] Current time in', timezone, ':', now.format('YYYY-MM-DD HH:mm:ss Z'));
   
-  // Get the date string in org timezone (e.g., "2026-08-21")
+  // Get the date string in org timezone (e.g., "2026-08-24")
   const todayDateString = now.format('YYYY-MM-DD');
   console.log('[todayRange] Today date string RETURNED:', todayDateString);
   
-  // Create UTC midnight date for that date string
-  // This matches how attendance records are stored
-  const [year, month, day] = todayDateString.split('-').map(Number);
-  const start = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
-  const end = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
+  // CRITICAL: Use moment to create midnight date, matching attendance storage
+  // This ensures exact match with how attendance records are stored
+  const start = now.clone().startOf('day').toDate();
+  // End of day (23:59:59.999 in org timezone)
+  const end = now.clone().endOf('day').toDate();
   
   console.log('[todayRange] Start:', start.toISOString());
   console.log('[todayRange] End:', end.toISOString());
@@ -427,6 +430,8 @@ exports.getUnitDashboard = async (user, query = {}) => {
     Holiday.find({
       org_id:     orgId,
       company_id: companyId,
+      // For unit-level users (hr_manager, unit_admin), show holidays for their unit OR company-wide holidays
+      ...(unitId && { $or: [{ unit_id: unitId }, { unit_id: null }] }),
       date:       { $gte: new Date() },
       isDeleted:  false,
     })
@@ -751,14 +756,19 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
     }))];
   }
 
+  // CRITICAL FIX: Use timezone-aware date generation consistent with attendance service
+  const todayMidnightTimestamp = getTodayDateInOrgTimezone(timezone);
+  
   const [todayRecord, monthAtt, recentLeaves, upcomingHols] = await Promise.all([
 
+    // CRITICAL FIX: Query by exact date match (org timezone midnight)
+    // Attendance records are stored with moment().tz(timezone).startOf('day').toDate()
     Attendance.findOne({
       org_id:     orgId,
       company_id: companyId,
       unit_id:    unitId,
       employeeId: empId,
-      date:       { $gte: todayStart, $lte: todayEnd },
+      date:       todayMidnightTimestamp, // Exact match using same method as attendance storage
     }).select("checkIn checkOut status isLate lateMinutes workingHours isWFH").lean(),
 
     Attendance.aggregate([
@@ -797,6 +807,8 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
     Holiday.find({
       org_id:     orgId,
       company_id: companyId,
+      // Show holidays for employee's unit OR company-wide holidays
+      ...(unitId && { $or: [{ unit_id: unitId }, { unit_id: null }] }),
       date:       { $gte: new Date() },
       isDeleted:  false,
     })
@@ -985,10 +997,12 @@ exports.getManagerDashboard = async (user, query = {}) => {
     .select("startDate endDate totalDays status createdAt")
     .lean();
 
-  // 7. Upcoming holidays (company level - not filtered by unit)
+  // 7. Upcoming holidays (filtered by unit for unit-level users)
   const upcomingHolidays = await Holiday.find({
     org_id: orgId,
     company_id: companyId,
+    // Show holidays for manager's unit OR company-wide holidays
+    ...(unitId && { $or: [{ unit_id: unitId }, { unit_id: null }] }),
     date: { $gte: new Date() },
     isDeleted: false,
   })

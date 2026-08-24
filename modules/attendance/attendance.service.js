@@ -369,6 +369,8 @@ exports.punchIn = async (data, user, req = null) => {
   const holiday = await Holiday.findOne({
     org_id:     user.orgId,
     company_id: user.companyId,
+    // For unit-level employees, check unit-specific holiday or company-wide holiday
+    ...(user.unitId && { $or: [{ unit_id: user.unitId }, { unit_id: null }] }),
     date:       { $gte: today, $lt: new Date(today.getTime() + 86400000) },
     isDeleted:  false,
   }).select("name type").lean();
@@ -1282,6 +1284,8 @@ exports.adminPunchIn = async (data, user) => {
   const holiday = await Holiday.findOne({
     org_id: user.orgId,
     company_id: user.companyId,
+    // For unit-level employees, check unit-specific holiday or company-wide holiday
+    ...(user.unitId && { $or: [{ unit_id: user.unitId }, { unit_id: null }] }),
     date: { $gte: today, $lt: new Date(today.getTime() + 86400000) },
     isDeleted: false
   }).select('name type').lean()

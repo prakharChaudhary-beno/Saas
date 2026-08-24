@@ -5,6 +5,7 @@
 
 const mongoose = require("mongoose");
 const AppError = require("../../utils/appError");
+const moment = require("moment-timezone");
 
 const Employee     = require("../employee/models/employee.model");
 const Attendance   = require("../attendance/models/attendance.model");
@@ -23,15 +24,35 @@ const Subscription = require("../subscription/models/subscription.Models");
 const Plan         = require("../plan/models/plan.model");
 const AuditLog     = require("../superAdmin/models/auditLog.models");
 const Role = require("../role/role.model");
+const CompanyConfig = require("../companyConfig/models/companyConfig.model");
+
+// CRITICAL FIX: Import timezone utility for consistent date handling
+const { getTodayDateInOrgTimezone } = require("../../utils/timezone");
 
 
 const toObjId = (id) => new mongoose.Types.ObjectId(id);
 
-const todayRange = () => {
-  const now   = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const end   = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
-  return { start, end };
+// Create date range based on ORGANIZATION TIMEZONE (not server timezone)
+// CRITICAL FIX: Use same date generation method as attendance service
+// Attendance records use getTodayDateInOrgTimezone() which calls moment().tz().startOf('day').toDate()
+const todayRange = (timezone = 'Asia/Kolkata') => {
+  const now = moment.tz(timezone);
+  console.log('[todayRange] Current time in', timezone, ':', now.format('YYYY-MM-DD HH:mm:ss Z'));
+  
+  // Get the date string in org timezone (e.g., "2026-08-24")
+  const todayDateString = now.format('YYYY-MM-DD');
+  console.log('[todayRange] Today date string RETURNED:', todayDateString);
+  
+  // CRITICAL: Use moment to create midnight date, matching attendance storage
+  // This ensures exact match with how attendance records are stored
+  const start = now.clone().startOf('day').toDate();
+  // End of day (23:59:59.999 in org timezone)
+  const end = now.clone().endOf('day').toDate();
+  
+  console.log('[todayRange] Start:', start.toISOString());
+  console.log('[todayRange] End:', end.toISOString());
+  
+  return { start, end, dateString: todayDateString };
 };
 
 const monthRange = (monthStr) => {
@@ -41,12 +62,12 @@ const monthRange = (monthStr) => {
   return { start, end };
 };
 
-const currentMonthStr = () => {
-  const now = new Date();
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+const currentMonthStr = (timezone = 'Asia/Kolkata') => {
+  const now = moment.tz(timezone);
+  return `${now.year()}-${String(now.month() + 1).padStart(2, "0")}`;
 };
 
-const currentYear = () => new Date().getUTCFullYear();
+const currentYear = (timezone = 'Asia/Kolkata') => moment.tz(timezone).year();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. ORG ADMIN DASHBOARD
@@ -235,7 +256,11 @@ exports.getCompanyDashboard = async (user, query = {}) => {
       .lean(),
 
     Role.countDocuments({
-      $or: [{ org_id: orgId }, { org_id: null, isSystem: true }],
+      level: "company",
+      $or: [
+        { org_id: orgId, company_id: companyId, unit_id: null },
+        { org_id: null, isSystem: true }
+      ],
       isDeleted: false,
       status: "ACTIVE",
     }),
@@ -333,11 +358,27 @@ exports.getUnitDashboard = async (user, query = {}) => {
     throw new AppError("Access denied", 403);
   }
 
-  const month = query.month || currentMonthStr();
+  // Fetch organization timezone from CompanyConfig
+  const companyConfig = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId })
+    .select('timezone')
+    .lean();
+  const timezone = companyConfig?.timezone || 'Asia/Kolkata';
+  
+  const month = query.month || currentMonthStr(timezone);
   const { start: monthStart, end: monthEnd } = monthRange(month);
-  const { start: todayStart, end: todayEnd } = todayRange();
+  
+  const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone);
 
-  const [userStats, deptCount, desigCount, employeeCount, todayAtt, pendingLeaves, recentUsers, upcomingHols, monthAtt, roleCount, recentActivity] = await Promise.all([
+  console.log('[getUnitDashboard] AFTER todayRange call:', {
+    timezone,
+    todayDateStringReturned: todayDateString,
+    todayDateStringType: typeof todayDateString,
+    todayStartISO: todayStart.toISOString(),
+    todayEndISO: todayEnd.toISOString(),
+    currentTime: new Date().toISOString()
+  });
+
+  const [userStats, deptCount, desigCount, employeeCount, todayAtt, pendingLeaves, recentUsers, upcomingHols, roleCount, roleList, recentActivityUsers, recentLeaves, monthAtt] = await Promise.all([
 
     User.aggregate([
       { $match: { org_id: toObjId(orgId), company_id: toObjId(companyId), unit_id: toObjId(unitId), is_deleted: false } },
@@ -389,6 +430,8 @@ exports.getUnitDashboard = async (user, query = {}) => {
     Holiday.find({
       org_id:     orgId,
       company_id: companyId,
+      // For unit-level users (hr_manager, unit_admin), show holidays for their unit OR company-wide holidays
+      ...(unitId && { $or: [{ unit_id: unitId }, { unit_id: null }] }),
       date:       { $gte: new Date() },
       isDeleted:  false,
     })
@@ -398,15 +441,46 @@ exports.getUnitDashboard = async (user, query = {}) => {
       .lean(),
 
     Role.countDocuments({
-      $or: [{ org_id: orgId }, { org_id: null, isSystem: true }],
+      level: "unit",
+      $or: [
+        { org_id: orgId, company_id: companyId, unit_id: unitId },
+        { org_id: null, isSystem: true }
+      ],
       isDeleted: false,
       status: "ACTIVE",
     }),
 
+    Role.find({
+      level: "unit",
+      $or: [
+        { org_id: orgId, company_id: companyId, unit_id: unitId },
+        { org_id: null, isSystem: true }
+      ],
+      isDeleted: false,
+      status: "ACTIVE",
+    })
+      .sort({ name: 1 })
+      .limit(10)
+      .select("name slug description")
+      .lean(),
+
     User.find({ org_id: orgId, unit_id: unitId, is_deleted: false })
       .sort({ createdAt: -1 })
-      .limit(5)
+      .limit(10)
       .select("name email createdAt")
+      .lean(),
+
+    // Fetch recent leave approvals/rejections for activity feed
+    LeaveRequest.find({
+      org_id: orgId,
+      unit_id: unitId,
+      status: { $in: ["APPROVED", "REJECTED"] },
+      isDeleted: false,
+    })
+      .sort({ updatedAt: -1 })
+      .limit(10)
+      .populate("employeeId", "name employeeId")
+      .select("status updatedAt startDate endDate totalDays employeeId approvalHistory")
       .lean(),
 
     Attendance.aggregate([
@@ -429,8 +503,113 @@ exports.getUnitDashboard = async (user, query = {}) => {
   ]);
 
   const todayMap = { PRESENT: 0, ABSENT: 0, LATE: 0, HALF_DAY: 0, ON_LEAVE: 0, WFH: 0 };
+  
+  console.log('[getUnitDashboard] Today attendance raw result:', {
+    todayAttLength: todayAtt.length,
+    todayAttData: todayAtt,
+    queryDateRange: {
+      start: todayStart,
+      end: todayEnd,
+      startISO: todayStart.toISOString(),
+      endISO: todayEnd.toISOString()
+    }
+  });
+  
+  // Debug: Show first few attendance records to see what dates they have
+  const sampleAttendance = await Attendance.find({
+    org_id: orgId,
+    company_id: companyId,
+    unit_id: unitId
+  }).sort({ date: -1 }).limit(5).select('date status employeeId').lean();
+  
+  console.log('[getUnitDashboard] Sample recent attendance records:', {
+    count: sampleAttendance.length,
+    records: sampleAttendance.map(a => ({
+      employeeId: a.employeeId?.toString(),
+      date: a.date,
+      dateISO: a.date?.toISOString(),
+      status: a.status
+    }))
+  });
+  
   todayAtt.forEach((r) => { if (todayMap[r._id] !== undefined) todayMap[r._id] = r.count; });
   const totalPresent = todayMap.PRESENT + todayMap.LATE + todayMap.WFH;
+  
+  // Calculate absent: total employees - those who are present/late/wfh/onLeave
+  const calculatedAbsent = Math.max(0, employeeCount - totalPresent - todayMap.ON_LEAVE);
+  
+  console.log('[getUnitDashboard] Today calculation:', {
+    employeeCount,
+    todayAttRaw: todayAtt,
+    todayMap,
+    totalPresent,
+    calculatedAbsent,
+    pendingLeavesCount: pendingLeaves.length
+  });
+  
+  console.log('[getUnitDashboard] Recent Activity DEBUG:', {
+    orgId,
+    companyId,
+    unitId,
+    recentUsersCount: recentActivityUsers?.length || 0,
+    recentUsersFirst: recentActivityUsers?.[0] || null,
+    recentLeavesCount: recentLeaves?.length || 0,
+    recentLeavesFirst: recentLeaves?.[0] || null,
+    roleCount
+  });
+
+  // Build activity feed combining user joins and leave actions
+  const activityFeed = [];
+  
+  // Add user joined activities
+  (recentActivityUsers || []).forEach(user => {
+    activityFeed.push({
+      type: 'USER_JOINED',
+      description: `${user.name} joined the unit`,
+      name: user.name,
+      timestamp: user.createdAt,
+    });
+  });
+  
+  // Add leave approved/rejected activities
+  (recentLeaves || []).forEach(leave => {
+    const employeeName = leave.employeeId?.name || 'Unknown';
+    const lastApproval = (leave.approvalHistory || []).slice(-1)[0];
+    const approverName = lastApproval?.approverName || 'System';
+    const leaveDates = `${new Date(leave.startDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} - ${new Date(leave.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`;
+    
+    if (leave.status === 'APPROVED') {
+      activityFeed.push({
+        type: 'LEAVE_APPROVED',
+        description: `${approverName} approved leave for ${employeeName} (${leaveDates})`,
+        name: employeeName,
+        timestamp: lastApproval?.actionAt || leave.updatedAt,
+      });
+    } else if (leave.status === 'REJECTED') {
+      activityFeed.push({
+        type: 'LEAVE_REJECTED',
+        description: `${approverName} rejected leave for ${employeeName} (${leaveDates})`,
+        name: employeeName,
+        timestamp: lastApproval?.actionAt || leave.updatedAt,
+      });
+    }
+  });
+  
+  // Sort by timestamp (most recent first) and take top 5
+  const recentActivity = activityFeed
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 5);
+
+  console.log('[getUnitDashboard] Recent Activity FINAL:', {
+    activityFeedLength: activityFeed.length,
+    recentActivityLength: recentActivity.length,
+    recentActivityData: recentActivity.map(a => ({
+      type: a.type,
+      description: a.description,
+      timestamp: a.timestamp,
+      timestampISO: a.timestamp ? new Date(a.timestamp).toISOString() : null
+    }))
+  });
 
   const uStats = userStats[0] || { total: 0, active: 0, inactive: 0, blocked: 0 };
   const mAtt   = monthAtt[0]  || { present: 0, absent: 0, late: 0, onLeave: 0, totalWorkingHours: 0, totalOvertimeHours: 0 };
@@ -439,27 +618,22 @@ exports.getUnitDashboard = async (user, query = {}) => {
     generatedAt: new Date(),
     unitId,
     companyId,
-    roles: { total: roleCount },
+    roles: { total: roleCount, list: roleList },
+    recentActivity,
     month,
     users:        { total: uStats.total, active: uStats.active, inactive: uStats.inactive, blocked: uStats.blocked },
     employees:    { total: employeeCount },
     departments:  { total: deptCount },
     designations: { total: desigCount },
     todayAttendance: {
-      date:           todayStart.toISOString().split("T")[0],
+      date:           todayDateString,
       present:        totalPresent,
-      absent:         todayMap.ABSENT,
+      absent:         calculatedAbsent,  // Calculated based on total employees
       late:           todayMap.LATE,
       onLeave:        todayMap.ON_LEAVE,
       wfh:            todayMap.WFH,
       attendanceRate: employeeCount > 0 ? Math.round((totalPresent / employeeCount) * 100) : 0,
     },
-    recentActivity: recentActivity.map((u) => ({
-      type:      "USER_JOINED",
-      name:      u.name,
-      email:     u.email,
-      timestamp: u.createdAt,
-    })),
     monthlyAttendance: {
       present:            mAtt.present,
       absent:             mAtt.absent,
@@ -500,11 +674,18 @@ exports.getUnitDashboard = async (user, query = {}) => {
 
 exports.getEmployeeDashboard = async (user, query = {}) => {
   const { orgId, companyId, unitId, userId } = user;
-  const month = query.month || currentMonthStr();
+  
+  // Fetch organization timezone
+  const companyConfig = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId })
+    .select('timezone')
+    .lean();
+  const timezone = companyConfig?.timezone || 'Asia/Kolkata';
+  
+  const month = query.month || currentMonthStr(timezone);
   const [yr, mon] = month.split("-").map(Number);
   const year = yr; // Use year from month parameter, not current year
   const { start: monthStart, end: monthEnd } = monthRange(month);
-  const { start: todayStart, end: todayEnd } = todayRange();
+  const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone);
 
   const employee = await Employee.findOne({
     userId,
@@ -575,14 +756,19 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
     }))];
   }
 
+  // CRITICAL FIX: Use timezone-aware date generation consistent with attendance service
+  const todayMidnightTimestamp = getTodayDateInOrgTimezone(timezone);
+  
   const [todayRecord, monthAtt, recentLeaves, upcomingHols] = await Promise.all([
 
+    // CRITICAL FIX: Query by exact date match (org timezone midnight)
+    // Attendance records are stored with moment().tz(timezone).startOf('day').toDate()
     Attendance.findOne({
       org_id:     orgId,
       company_id: companyId,
       unit_id:    unitId,
       employeeId: empId,
-      date:       { $gte: todayStart, $lte: todayEnd },
+      date:       todayMidnightTimestamp, // Exact match using same method as attendance storage
     }).select("checkIn checkOut status isLate lateMinutes workingHours isWFH").lean(),
 
     Attendance.aggregate([
@@ -621,6 +807,8 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
     Holiday.find({
       org_id:     orgId,
       company_id: companyId,
+      // Show holidays for employee's unit OR company-wide holidays
+      ...(unitId && { $or: [{ unit_id: unitId }, { unit_id: null }] }),
       date:       { $gte: new Date() },
       isDeleted:  false,
     })
@@ -650,7 +838,7 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
       status:         employee.status,
     },
     today: {
-      date:          todayStart.toISOString().split("T")[0],
+      date:          todayDateString,
       hasPunchedIn:  !!todayRecord?.checkIn,
       hasPunchedOut: !!todayRecord?.checkOut,
       isLive:        !!(todayRecord?.checkIn && !todayRecord?.checkOut),
@@ -711,9 +899,16 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
 
 exports.getManagerDashboard = async (user, query = {}) => {
   const { orgId, companyId, unitId } = user;
-  const month = query.month || currentMonthStr();
+  
+  // Fetch organization timezone
+  const companyConfig = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId })
+    .select('timezone')
+    .lean();
+  const timezone = companyConfig?.timezone || 'Asia/Kolkata';
+  
+  const month = query.month || currentMonthStr(timezone);
   const { start: monthStart, end: monthEnd } = monthRange(month);
-  const { start: todayStart, end: todayEnd } = todayRange();
+  const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone);
 
   // 1. Get manager's employee record
   const managerEmployee = await Employee.findOne({
@@ -787,6 +982,35 @@ exports.getManagerDashboard = async (user, query = {}) => {
 
   const attSummary = teamAttSummary[0] || { present: 0, absent: 0, late: 0, onLeave: 0 };
 
+  // 6. Recent leaves from team (all statuses)
+  const recentLeaves = await LeaveRequest.find({
+    org_id: orgId,
+    company_id: companyId,
+    unit_id: unitId,
+    employeeId: { $in: teamIds },
+    isDeleted: false,
+  })
+    .sort({ createdAt: -1 })
+    .limit(5)
+    .populate("employeeId", "name employeeId")
+    .populate("leaveTypeId", "name code")
+    .select("startDate endDate totalDays status createdAt")
+    .lean();
+
+  // 7. Upcoming holidays (filtered by unit for unit-level users)
+  const upcomingHolidays = await Holiday.find({
+    org_id: orgId,
+    company_id: companyId,
+    // Show holidays for manager's unit OR company-wide holidays
+    ...(unitId && { $or: [{ unit_id: unitId }, { unit_id: null }] }),
+    date: { $gte: new Date() },
+    isDeleted: false,
+  })
+    .sort({ date: 1 })
+    .limit(5)
+    .select("name date")
+    .lean();
+
   return {
     generatedAt: new Date(),
     month,
@@ -817,6 +1041,21 @@ exports.getManagerDashboard = async (user, query = {}) => {
       totalDays: l.totalDays,
       status: l.status,
       appliedOn: l.createdAt,
+    })),
+    recentLeaves: recentLeaves.map(l => ({
+      id: l._id,
+      employee: l.employeeId ? { name: l.employeeId.name, employeeId: l.employeeId.employeeId } : null,
+      leaveType: l.leaveTypeId ? { name: l.leaveTypeId.name, code: l.leaveTypeId.code } : null,
+      startDate: l.startDate,
+      endDate: l.endDate,
+      totalDays: l.totalDays,
+      status: l.status,
+      appliedOn: l.createdAt,
+    })),
+    holidays: upcomingHolidays.map(h => ({
+      id: h._id,
+      name: h.name,
+      date: h.date,
     })),
   };
 };

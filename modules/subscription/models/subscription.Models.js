@@ -115,6 +115,17 @@ const subscriptionSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    // ─── Trial Extension Tracking ───────────────────────────────
+    // Running total of days granted via approved TrialExtensionRequest
+    // docs (see modules/subscription/models/trialExtensionRequest.model.js).
+    // Capped at MAX_TRIAL_EXTENSION_DAYS in subscription.service.js —
+    // this field is what that cap is checked against, so a customer
+    // can't keep requesting +5 days forever.
+    trial_extension_days_used: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

@@ -440,22 +440,8 @@ function buildTree(items) {
   // Second pass: build tree
   items.forEach(item => {
     const node = itemMap[item.id];
-    // Handle both populated and unpopulated parentId
-    const parentDbId = item.parentId?._id?.toString() || item.parentId?.toString() || null;
-    
-    if (parentDbId) {
-      const parent = itemMap[parentDbId];
-      if (parent) {
-        parent.children.push(node);
-      } else {
-        // Parent not found, add to root
-        tree.push(node);
-      }
-    } else {
-      tree.push(node);
-    }
-  });
-
+    if (item.parentId) {
+      const parent = itemMap[item.parentId];
   return tree;
 }
 

@@ -22,4 +22,7 @@ router.post(
   organizationController.uploadLogo
 );
 
+// GET complete organization hierarchy tree
+router.get("/hierarchy-tree", authenticate, organizationController.getHierarchyTree);
+
 module.exports = router;

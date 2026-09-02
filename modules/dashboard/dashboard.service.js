@@ -12,7 +12,6 @@ const Attendance   = require("../attendance/models/attendance.model");
 const Department   = require("../department/department.model");
 const Designation  = require("../designation/designation.model");
 const LeaveRequest = require("../leave/models/leaveRequest.models");
-const LeaveBalance = require("../leave/models/leaveBalance.models");
 const User         = require("../auth/models/user.model");
 const Company      = require("../company/models/company.model");
 const LOB          = require("../lob/models/lob.model");
@@ -378,10 +377,23 @@ exports.getUnitDashboard = async (user, query = {}) => {
     currentTime: new Date().toISOString()
   });
 
+  // ── CRITICAL FIX: Find employee role to exclude from user stats ──
+  // Users and Employees are separate entities:
+  // - Users: Administrative accounts (org_admin, company_admin, unit_admin, hr_manager, manager)
+  // - Employees: Workforce managed separately via Employee collection
+  const employeeRole = await Role.findOne({ slug: "employee" }).select("_id").lean();
+
   const [userStats, deptCount, desigCount, employeeCount, todayAtt, pendingLeaves, recentUsers, upcomingHols, roleCount, roleList, recentActivityUsers, recentLeaves, monthAtt] = await Promise.all([
 
     User.aggregate([
-      { $match: { org_id: toObjId(orgId), company_id: toObjId(companyId), unit_id: toObjId(unitId), is_deleted: false } },
+      { $match: { 
+        org_id: toObjId(orgId), 
+        company_id: toObjId(companyId), 
+        unit_id: toObjId(unitId), 
+        is_deleted: false,
+        // ── EXCLUDE EMPLOYEES: Count only administrative users ──
+        ...(employeeRole && { roleId: { $ne: employeeRole._id } })
+      }},
       { $group: {
         _id:      null,
         total:    { $sum: 1 },
@@ -702,59 +714,11 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
   const empId = employee._id;
   const daysInMonth = new Date(yr, mon, 0).getDate();
 
-  // Ensure leave balances exist for all leave types
-  const LeaveType = require("../leave/models/leaveType.models");
-  const leaveTypes = await LeaveType.find({
-    org_id: orgId,
-    company_id: companyId,
-    isActive: true,
-    isDeleted: false,
-  }).select("_id name code color defaultDaysPerYear").lean();
-
-  // Get existing balances
-  let leaveBalances = await LeaveBalance.find({
-    org_id: orgId,
-    company_id: companyId,
-    employeeId: empId,
-    year,
-  })
-    .populate("leaveTypeId", "name code color defaultDaysPerYear")
-    .lean();
-
-  // Initialize missing balances
-  const existingLeaveTypeIds = new Set(leaveBalances.map(lb => lb.leaveTypeId?._id?.toString() || lb.leaveTypeId?.toString()));
-  const missingLeaveTypes = leaveTypes.filter(lt => !existingLeaveTypeIds.has(lt._id.toString()));
-
-  if (missingLeaveTypes.length > 0) {
-    const newBalances = await Promise.all(
-      missingLeaveTypes.map(lt =>
-        LeaveBalance.create({
-          org_id: orgId,
-          company_id: companyId,
-          unit_id: unitId || null,
-          employeeId: empId,
-          leaveTypeId: lt._id,
-          year,
-          totalAllocated: lt.defaultDaysPerYear || 0,
-          used: 0,
-          pending: 0,
-          remaining: lt.defaultDaysPerYear || 0,
-          adjustmentHistory: [{
-            days: lt.defaultDaysPerYear || 0,
-            reason: "Auto-initialized on dashboard fetch",
-            adjustedBy: empId,
-            type: "YEAR_INITIALIZATION",
-          }],
-        })
-      )
-    );
-
-    // Merge new balances with existing
-    leaveBalances = [...leaveBalances, ...newBalances.map(nb => ({
-      ...nb.toObject(),
-      leaveTypeId: missingLeaveTypes.find(lt => lt._id.toString() === nb.leaveTypeId.toString()),
-    }))];
-  }
+  // CRITICAL FIX: Use dynamic leave balance calculation from active policy
+  // This replaces the old LeaveBalance collection approach
+  const leaveService = require("../leave/leave.service");
+  const leaveBalancesData = await leaveService.calculateDynamicLeaveBalances(empId, year);
+  const leaveBalances = leaveBalancesData.balances || [];
 
   // CRITICAL FIX: Use timezone-aware date generation consistent with attendance service
   const todayMidnightTimestamp = getTodayDateInOrgTimezone(timezone);
@@ -866,8 +830,8 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
     leaveBalances: leaveBalances.map((lb) => ({
       leaveType:      lb.leaveTypeId?.name,
       code:           lb.leaveTypeId?.code,
-      color:          lb.leaveTypeId?.color,
-      totalAllocated: lb.totalAllocated || lb.leaveTypeId?.defaultDaysPerYear || 0,
+      color:          lb.leaveTypeId?.colorCode,
+      totalAllocated: lb.allocated || 0,
       used:           lb.used     || 0,
       pending:        lb.pending  || 0,
       remaining:      lb.remaining || 0,

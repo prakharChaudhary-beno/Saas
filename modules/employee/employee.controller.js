@@ -34,6 +34,13 @@ exports.getEmployees = async (req, res, next) => {
   }
 };
 
+exports.downloadMyDocument = async (req, res, next) => {
+  try {
+    const url = await employeeService.downloadMyDocument(req.params.docId, req.user);
+    res.redirect(url);
+  } catch (error) { next(error); }
+};
+
 exports.getEmployeeById = async (req, res, next) => {
   try {
 

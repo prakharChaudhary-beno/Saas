@@ -20,4 +20,8 @@ router.post("/config", checkPermission("attendance.create"), validate(configSche
 // PUT — unit_admin
 router.put("/config", checkPermission("attendance.update"), validate(configSchema), controller.updateConfig);
 
+
+router.post("/configs", checkPermission("company.settings.update"), validate(configSchema), controller.createConfig);
+router.put("/configs",  checkPermission("company.settings.update"), validate(configSchema), controller.updateConfig);
+
 module.exports = router;

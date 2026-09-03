@@ -785,6 +785,32 @@ exports.getMyDocuments = async (user) => {
     .sort({ createdAt: -1 });
 };
 
+
+exports.downloadMyDocument = async (docId, user) => {
+  const employee = await Employee.findOne({
+    userId:    user.userId,
+    org_id:    user.orgId,
+    isDeleted: false,
+  }).select("_id").lean();
+
+  if (!employee) throw new AppError("Employee profile not found", 404);
+
+  const doc = await EmployeeDocument.findOne({
+    _id:        docId,
+    employeeId: employee._id,   // 🔒 security: apna hi document milega
+    isDeleted:  false,
+  }).lean();
+
+  if (!doc) throw new AppError("Document not found", 404);
+
+  // Cloudinary "fl_attachment" flag force-downloads instead of opening inline
+  const downloadUrl = doc.url.includes("cloudinary.com")
+    ? doc.url.replace("/upload/", "/upload/fl_attachment/")
+    : doc.url;
+
+  return downloadUrl;
+};
+
 // ─── E-10: PROFILE COMPLETION INDICATOR ──────────────────────
 exports.getProfileCompletion = async (user) => {
   const employee = await Employee.findOne({

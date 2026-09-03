@@ -425,3 +425,9 @@ exports.resetPassword = async (token, password) => {
 
   return { message: "Password reset successfully. Please login with your new password." };
 };
+
+exports.updateProfile = async (userId, updates) => {
+  const user = await User.findByIdAndUpdate(userId, updates, { new: true }).select("-password");
+  if (!user) throw new AppError("User not found", 404);
+  return user;
+};

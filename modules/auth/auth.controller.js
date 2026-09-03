@@ -399,6 +399,18 @@ exports.completeRegistration = async (req, res, next) => {
   }
 };
 
+exports.updateMe = async (req, res, next) => {
+  try {
+    const allowed = ["name", "email", "phone"]; // whitelist only
+    const updates = {};
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+    const user = await authService.updateProfile(req.user.userId, updates);
+    res.json({ success: true, message: "Profile updated", data: user });
+  } catch (err) { next(err); }
+};
+
 exports.forgotPassword = async (req, res, next) => {
   try {
     const result = await authService.forgotPassword(req.body.email);

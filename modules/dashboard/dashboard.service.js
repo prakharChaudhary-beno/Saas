@@ -75,7 +75,15 @@ const currentYear = (timezone = 'Asia/Kolkata') => moment.tz(timezone).year();
 exports.getOrgDashboard = async (user) => {
   const { orgId } = user;
   const thisMonthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
-  const Role = require("../role/role.model");
+
+  // FIX (Bug: Dashboard Total Users Count Mismatch) — "Total Users" must
+  // count the same set of users as the Admin Users list (user.service.js
+  // getUsers), which excludes the "employee" role. Without this, the
+  // dashboard counts employee-role login accounts that never show up in
+  // the Admin Users screen, causing a count mismatch.
+  const employeeRole = await Role.findOne({ slug: "employee" }).select("_id").lean();
+  const adminUserFilter = { org_id: orgId, is_deleted: false };
+  if (employeeRole) adminUserFilter.roleId = { $ne: employeeRole._id };
 
   const [
     companies, lobCount, userCount, employeeCount,
@@ -95,7 +103,7 @@ exports.getOrgDashboard = async (user) => {
     ]),
 
     LOB.countDocuments({ org_id: orgId, is_deleted: false }),
-    User.countDocuments({ org_id: orgId, is_deleted: false }),
+    User.countDocuments(adminUserFilter),
     Employee.countDocuments({ org_id: orgId, isDeleted: false }),
 
     Company.find({ org_id: orgId, is_deleted: false })

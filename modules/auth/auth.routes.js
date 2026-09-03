@@ -64,6 +64,7 @@ router.post("/change-password", authenticate, validate(changePasswordSchema), ch
 
 // Company details submit — naye user ke liye
 router.post("/complete-registration", authController.completeRegistration);
+router.patch("/me", authenticate, authController.updateMe);
 
 router.post(
   "/forgot-password",

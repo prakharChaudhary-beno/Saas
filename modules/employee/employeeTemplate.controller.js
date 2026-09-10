@@ -111,7 +111,7 @@ exports.getDropdownData = async (req, res) => {
 
     const [departments, designations, units] = await Promise.all([
       Department.find({ org_id: orgId, isDeleted: false }).select('name').sort('name').lean(),
-      Designation.find({ org_id: orgId, isDeleted: false }).select('name').sort('name').lean(),
+      Designation.find({ org_id: orgId, isDeleted: false, status: 'active' }).select('name').sort('name').lean(),
       Unit.find({ org_id: orgId, isDeleted: false }).select('name').sort('name').lean()
     ])
 

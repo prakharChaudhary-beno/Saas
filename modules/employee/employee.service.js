@@ -107,6 +107,13 @@ const hasCircularChain = async (employeeId, managerId, maxDepth = 10) => {
 // ─── CREATE EMPLOYEE ──────────────────────────────────────────
 exports.createEmployee = async (payload, user) => {
   const { email, salary, departmentId, designationId, reportingManagerId, unit_id } = payload;
+  if (designationId) {
+  const Designation = require("../designation/designation.model");
+   const desig = await Designation.findOne({
+   _id: designationId, company_id: user.companyId, isDeleted: false, status: "active",
+  });
+  if (!desig) throw new AppError("Designation not found or inactive", 404);
+  }
 
   // unit_id — from payload or from user context
   const employeeUnitId = unit_id || user.unitId;
@@ -447,9 +454,10 @@ exports.updateEmployee = async (id, data, user) => {
     const desig = await Designation.findOne({
       _id:        data.designationId,
       company_id: user.companyId,
-      isDeleted:  false
+      isDeleted:  false,
+      status:     "active",
     });
-    if (!desig) throw new AppError("Designation not found", 404);
+  if (!desig) throw new AppError("Designation not found or inactive", 404);
   }
 
   // Salary recalculate

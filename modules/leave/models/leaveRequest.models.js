@@ -117,6 +117,8 @@ const leaveRequestSchema = new mongoose.Schema(
       default: "PENDING",
       index:   true,
     },
+    editedAt: { type: Date, default: null },
+    editedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 
     l1ApproverId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     l1Status:     { type: String, enum: ["PENDING", "APPROVED", "REJECTED", null], default: null },

@@ -15,7 +15,7 @@ exports.generateExcelTemplate = async (orgId) => {
     // Fetch master data for dropdowns
     const [departments, designations, units, managers] = await Promise.all([
       Department.find({ org_id: orgId, isDeleted: false }).select('name').sort('name').lean(),
-      Designation.find({ org_id: orgId, isDeleted: false }).select('name').sort('name').lean(),
+      Designation.find({ org_id: orgId, isDeleted: false, status: 'active' }).select('name').sort('name').lean(),
       Unit.find({ org_id: orgId, isDeleted: false }).select('name').sort('name').lean(),
       Employee.find({ org_id: orgId, isDeleted: false, status: 'ACTIVE' })
         .populate('userId', 'email')

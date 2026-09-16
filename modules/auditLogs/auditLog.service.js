@@ -53,7 +53,7 @@ async function enrichWithEmployeeData(logs) {
   // Fetch employee data
   try {
     const employees = await Employee.find({
-      userId: { $in: Array.from(users).map(id => toObjId(id)) }
+      userId: { $in: Array.from(userIds).map(id => toObjId(id)) }
     })
     .select('userId name email employeeId profilePhoto')
     .lean();

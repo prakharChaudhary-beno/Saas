@@ -209,6 +209,8 @@ exports.checkSeatLimit = async (req, res, next) => {
     });
   } catch (err) {
     next(err);
+  }
+};
 
 const subscriptionService = require("./subscription.service");
 

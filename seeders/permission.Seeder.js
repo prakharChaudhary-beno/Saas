@@ -64,10 +64,10 @@ const permissions = [
   { name: "leave.approve", slug: "leave.approve", module: "leave", action: "approve", label: "Approve Leave",       scope: ["unit", "company"],         description: "Approve or reject leave requests", category: "HR Operations", frRef: "L-05" },
 
   // ─── Leave Type ──────────────────────────────────────────
-  { name: "leaveType.create", slug: "leaveType.create", module: "leaveType", action: "create", label: "Create Leave Type", scope: ["company"], description: "Create a company leave type", category: "HR Operations", frRef: null },
+  { name: "leaveType.create", slug: "leaveType.create", module: "leaveType", action: "create", label: "Create Leave Type", scope: ["company", "unit"], description: "Create a company leave type", category: "HR Operations", frRef: null },
   { name: "leaveType.read",   slug: "leaveType.read",   module: "leaveType", action: "read",   label: "View Leave Types",  scope: ["org", "company", "unit"], description: "View the company leave type catalog", category: "HR Operations", frRef: null },
-  { name: "leaveType.update", slug: "leaveType.update", module: "leaveType", action: "update", label: "Edit Leave Type",   scope: ["company"], description: "Update a company leave type", category: "HR Operations", frRef: null },
-  { name: "leaveType.delete", slug: "leaveType.delete", module: "leaveType", action: "delete", label: "Delete Leave Type", scope: ["company"], description: "Delete a company leave type", category: "HR Operations", frRef: null },
+  { name: "leaveType.update", slug: "leaveType.update", module: "leaveType", action: "update", label: "Edit Leave Type",   scope: ["company", "unit"], description: "Update a company leave type", category: "HR Operations", frRef: null },
+  { name: "leaveType.delete", slug: "leaveType.delete", module: "leaveType", action: "delete", label: "Delete Leave Type", scope: ["company", "unit"], description: "Delete a company leave type", category: "HR Operations", frRef: null },
 
   // ─── Payroll ──────────────────────────────────────────────
   { name: "payroll.create", slug: "payroll.create", module: "payroll", action: "create", label: "Create Payroll",    scope: ["unit", "company"],         description: "Run payroll / create payroll records", category: "Payroll", frRef: null },
@@ -108,13 +108,13 @@ const permissions = [
   { name: "leavePolicy.create", slug: "leavepolicy.create", module: "leavePolicy", action: "create", label: "Create Leave Policy",   scope: ["company", "unit"],  description: "Create a leave policy", category: "HR Operations", frRef: null },
   { name: "leavePolicy.read",   slug: "leavepolicy.read",   module: "leavePolicy", action: "read",   label: "View Leave Policies",   scope: ["org", "company", "unit"], description: "View leave policies", category: "HR Operations", frRef: null },
   { name: "leavePolicy.update", slug: "leavepolicy.update", module: "leavePolicy", action: "update", label: "Edit Leave Policy",     scope: ["company", "unit"],  description: "Update a leave policy", category: "HR Operations", frRef: null },
-  { name: "leavePolicy.delete", slug: "leavepolicy.delete", module: "leavePolicy", action: "delete", label: "Delete Leave Policy",   scope: ["company"],          description: "Delete a leave policy", category: "HR Operations", frRef: null },
+  { name: "leavePolicy.delete", slug: "leavepolicy.delete", module: "leavePolicy", action: "delete", label: "Delete Leave Policy",   scope: ["company", "unit"],  description: "Delete a leave policy", category: "HR Operations", frRef: null },
 
   // ─── Attendance Policy ────────────────────────────────────
   { name: "attendancePolicy.create", slug: "attendancepolicy.create", module: "attendancePolicy", action: "create", label: "Create Attendance Policy",  scope: ["company", "unit"],  description: "Create attendance policy", category: "HR Operations", frRef: null },
   { name: "attendancePolicy.read",   slug: "attendancepolicy.read",   module: "attendancePolicy", action: "read",   label: "View Attendance Policies",  scope: ["org", "company", "unit"], description: "View attendance policies", category: "HR Operations", frRef: null },
   { name: "attendancePolicy.update", slug: "attendancepolicy.update", module: "attendancePolicy", action: "update", label: "Edit Attendance Policy",    scope: ["company", "unit"],  description: "Update attendance policy", category: "HR Operations", frRef: null },
-  { name: "attendancePolicy.delete", slug: "attendancepolicy.delete", module: "attendancePolicy", action: "delete", label: "Delete Attendance Policy",  scope: ["company"],          description: "Delete attendance policy", category: "HR Operations", frRef: null },
+  { name: "attendancePolicy.delete", slug: "attendancepolicy.delete", module: "attendancePolicy", action: "delete", label: "Delete Attendance Policy",  scope: ["company", "unit"],  description: "Delete attendance policy", category: "HR Operations", frRef: null },
 
   // ─── Regularisation Policy ─────────────────────────────────
   { name: "regularisationPolicy.create", slug: "regularisationpolicy.create", module: "regularisationPolicy", action: "create", label: "Create Regularisation Policy", scope: ["company", "unit"], description: "Create a regularisation policy", category: "HR Operations", frRef: null },
@@ -126,7 +126,7 @@ const permissions = [
   { name: "payrollPolicy.create", slug: "payrollpolicy.create", module: "payrollPolicy", action: "create", label: "Create Payroll Policy",  scope: ["company", "unit"],  description: "Create payroll policy", category: "Payroll", frRef: null },
   { name: "payrollPolicy.read",   slug: "payrollpolicy.read",   module: "payrollPolicy", action: "read",   label: "View Payroll Policies",  scope: ["org", "company", "unit"], description: "View payroll policies", category: "Payroll", frRef: null },
   { name: "payrollPolicy.update", slug: "payrollpolicy.update", module: "payrollPolicy", action: "update", label: "Edit Payroll Policy",    scope: ["company", "unit"],  description: "Update payroll policy", category: "Payroll", frRef: null },
-  { name: "payrollPolicy.delete", slug: "payrollpolicy.delete", module: "payrollPolicy", action: "delete", label: "Delete Payroll Policy",  scope: ["company"],          description: "Delete payroll policy", category: "Payroll", frRef: null },
+  { name: "payrollPolicy.delete", slug: "payrollpolicy.delete", module: "payrollPolicy", action: "delete", label: "Delete Payroll Policy",  scope: ["company", "unit"],  description: "Delete payroll policy", category: "Payroll", frRef: null },
 
   // ─── Subscription (Product Admin / Org Admin) ─────────────
   { name: "subscription.read",   slug: "subscription.read",   module: "subscription", action: "read",   label: "View Subscription",    scope: ["org"],  description: "View subscription details", category: "Configuration", frRef: null },

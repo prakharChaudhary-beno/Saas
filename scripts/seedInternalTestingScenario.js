@@ -169,6 +169,17 @@ const PEOPLE = [
     jobRole: "Graphic Designer",
     reportsTo: "manoj",
   },
+  {
+    key: "prakharChaudhry",
+    name: "Prakhar Chaudhry",
+    email: `prakhar.chaudhry@${TEST_EMAIL_DOMAIN}`,
+    phone: "9000000012",
+    role: "employee",
+    employeeId: "TSH-BT-012",
+    department: "Information Technology",
+    jobRole: "Backend Developer",
+    reportsTo: "rajat",
+  },
 ];
 
 async function findOrCreate(Model, filter, values) {

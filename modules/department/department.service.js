@@ -6,11 +6,29 @@ const AppError   = require("../../utils/appError");
 const { logDepartmentAudit } = require("./department.audit");
 
 // Scope filter — unit level
-const buildFilter = (user) => {
-  if (user.role === "SUPER_ADMIN") return {};
-  const filter = { org_id: user.orgId };
-  if (user.companyId) filter.company_id = user.companyId;
-  if (user.unitId)    filter.unit_id    = user.unitId;
+const buildFilter = (user, query = {}) => {
+  const requestedOrgId = query.orgId;
+  const requestedCompanyId = query.companyId;
+  const requestedUnitId = query.unit_id;
+
+  if (user.role !== "SUPER_ADMIN" && requestedOrgId && String(requestedOrgId) !== String(user.orgId)) {
+    throw new AppError("Organization access denied", 403);
+  }
+  if (user.companyId && requestedCompanyId && String(requestedCompanyId) !== String(user.companyId)) {
+    throw new AppError("Company access denied", 403);
+  }
+  if (user.unitId && requestedUnitId && String(requestedUnitId) !== String(user.unitId)) {
+    throw new AppError("Unit access denied", 403);
+  }
+
+  const filter = {};
+  const orgId = user.role === "SUPER_ADMIN" ? requestedOrgId : user.orgId;
+  const companyId = user.companyId || requestedCompanyId;
+  const unitId = user.unitId || requestedUnitId;
+
+  if (orgId) filter.org_id = orgId;
+  if (companyId) filter.company_id = companyId;
+  if (unitId) filter.unit_id = unitId;
   return filter;
 };
 
@@ -199,10 +217,7 @@ exports.createDepartmentTree = async (data, user) => {
  * - Populates department head details
  */
 exports.getDepartmentsTree = async (user, query = {}) => {
-  const { unit_id } = query;
-  const filter = { isDeleted: false, ...buildFilter(user) };
-
-  if (unit_id && !user.unitId) filter.unit_id = unit_id;
+  const filter = { isDeleted: false, ...buildFilter(user, query) };
 
   // Fetch all departments (flat)
   const departments = await Department.find(filter)

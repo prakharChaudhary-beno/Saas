@@ -4,11 +4,13 @@
 "use strict";
 
 const service = require("./regularisationPolicy.service");
+const Attendance = require("./models/attendance.model");
+const Employee = require("../employee/models/employee.model");
 
 // ─── CREATE ─────────────────────────────────────────────────────
 exports.createPolicy = async (req, res, next) => {
   try {
-    const policy = await service.createPolicy(req.body, req.user);
+    const policy = await service.createPolicy(req.body, req.user, req.query);
     res.status(201).json({
       success: true,
       message: "Regularisation policy created successfully",
@@ -41,7 +43,7 @@ exports.getPolicies = async (req, res, next) => {
 // ─── GET BY ID ──────────────────────────────────────────────────
 exports.getPolicyById = async (req, res, next) => {
   try {
-    const policy = await service.getPolicyById(req.params.id, req.user);
+    const policy = await service.getPolicyById(req.params.id, req.user, req.query);
     res.status(200).json({
       success: true,
       data: policy,
@@ -54,7 +56,7 @@ exports.getPolicyById = async (req, res, next) => {
 // ─── UPDATE ─────────────────────────────────────────────────────
 exports.updatePolicy = async (req, res, next) => {
   try {
-    const policy = await service.updatePolicy(req.params.id, req.body, req.user);
+    const policy = await service.updatePolicy(req.params.id, req.body, req.user, req.query);
     res.status(200).json({
       success: true,
       message: "Regularisation policy updated successfully",
@@ -68,7 +70,7 @@ exports.updatePolicy = async (req, res, next) => {
 // ─── DELETE ─────────────────────────────────────────────────────
 exports.deletePolicy = async (req, res, next) => {
   try {
-    const result = await service.deletePolicy(req.params.id, req.user);
+    const result = await service.deletePolicy(req.params.id, req.user, req.query);
     res.status(200).json({
       success: true,
       ...result,
@@ -81,7 +83,7 @@ exports.deletePolicy = async (req, res, next) => {
 // ─── TOGGLE ENABLE/DISABLE ──────────────────────────────────────
 exports.togglePolicy = async (req, res, next) => {
   try {
-    const policy = await service.togglePolicy(req.params.id, req.user);
+    const policy = await service.togglePolicy(req.params.id, req.user, req.query);
     res.status(200).json({
       success: true,
       message: `Policy ${policy.enabled ? "enabled" : "disabled"} successfully`,
@@ -95,11 +97,33 @@ exports.togglePolicy = async (req, res, next) => {
 // ─── GET EFFECTIVE POLICY ───────────────────────────────────────
 exports.getEffectivePolicy = async (req, res, next) => {
   try {
-    const Employee = require("../employee/models/employee.model");
-    const employee = await Employee.findOne({
-      userId: req.user.userId,
-      org_id: req.user.orgId,
-    }).lean();
+    let employee;
+
+    if (req.query.attendanceId) {
+      const attendance = await Attendance.findOne({
+        _id: req.query.attendanceId,
+        org_id: req.user.orgId,
+        ...(req.user.companyId ? { company_id: req.user.companyId } : {}),
+        ...(req.user.unitId ? { unit_id: req.user.unitId } : {}),
+      }).lean();
+
+      if (!attendance) {
+        return res.status(404).json({ success: false, message: "Attendance record not found" });
+      }
+
+      employee = await Employee.findOne({
+        _id: attendance.employeeId,
+        org_id: attendance.org_id,
+        company_id: attendance.company_id,
+        unit_id: attendance.unit_id,
+        isDeleted: false,
+      }).lean();
+    } else {
+      employee = await Employee.findOne({
+        userId: req.user.userId,
+        org_id: req.user.orgId,
+      }).lean();
+    }
 
     if (!employee) {
       return res.status(404).json({
@@ -108,10 +132,20 @@ exports.getEffectivePolicy = async (req, res, next) => {
       });
     }
 
-    const policy = await service.getEffectivePolicy(employee, req.user);
+    const scopedUser = {
+      ...req.user,
+      companyId: employee.company_id,
+      unitId: employee.unit_id,
+    };
+    const policy = await service.getEffectivePolicy(employee, scopedUser);
     res.status(200).json({
       success: true,
-      data: policy,
+      data: policy
+        ? {
+            ...policy,
+            allowedRegularizationTypes: service.getAllowedRegularizationTypes(policy),
+          }
+        : null,
     });
   } catch (error) {
     next(error);

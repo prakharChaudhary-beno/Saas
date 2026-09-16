@@ -12,12 +12,25 @@ const validate          = require("../../middlewares/validate.middleware");
 // ── Global guards ─────────────────────────────────────────────────────────────
 router.use(authenticate, checkTrial);
 
+const requireUnitLevel = (req, res, next) => {
+  if (req.user.level !== "unit") {
+    return res.status(403).json({
+      success: false,
+      message: "Leave balance is available only to unit-level users",
+    });
+  }
+
+  return next();
+};
+
 // ── SPECIFIC routes PEHLE (/:id se pehle hona chahiye) ───────────────────────
 
 // GET /leave/balances/my  ← /:id se UPAR hona chahiye
 // Dynamic balance calculation from active policy
 router.get(
   "/balances/my",
+  checkPermission("leave.read"),
+  requireUnitLevel,
   leaveController.getMyLeaveBalances
 );
 

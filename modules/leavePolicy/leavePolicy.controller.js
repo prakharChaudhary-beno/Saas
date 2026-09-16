@@ -38,7 +38,7 @@ exports.updateLeaveTypes = async (req, res, next) => {
 // Returns seeded LeaveTypes for HR to pick while building policy
 exports.getAvailableLeaveTypes = async (req, res, next) => {
   try {
-    const data = await service.getAvailableLeaveTypes(req.user);
+    const data = await service.getAvailableLeaveTypes(req.user, req.query);
     res.json({ success: true, message: "Available leave types fetched", data });
   } catch (err) { next(err); }
 };

@@ -25,6 +25,13 @@ exports.getReceivedDelegations = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+exports.getEligibleDelegatees = async (req, res, next) => {
+  try {
+    const result = await delegationService.getEligibleDelegatees(req.user);
+    res.status(200).json({ success: true, data: result });
+  } catch (e) { next(e); }
+};
+
 exports.getDelegationById = async (req, res, next) => {
   try {
     const result = await delegationService.getDelegationById(req.params.id, req.user);
@@ -35,7 +42,7 @@ exports.getDelegationById = async (req, res, next) => {
 exports.revokeDelegation = async (req, res, next) => {
   try {
     const result = await delegationService.revokeDelegation(req.params.id, req.body, req.user);
-    res.status(200).json({ success: true, data: result });
+    res.status(200).json({ success: true, message: result.message, data: result.delegation });
   } catch (e) { next(e); }
 };
 

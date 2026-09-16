@@ -10,6 +10,7 @@ const LeaveBalance = require("../leave/models/leaveBalance.models");
 const AppError     = require("../../utils/appError");
 const { invalidatePolicyCache } = require("../../utils/policyResolver");
 const policyVersionService = require("../policyVersion/policyVersion.service");
+const { resolveLeaveTypeScope } = require("../leave/leaveTypeScope");
 // seedLeaveBalances removed - balances calculated dynamically from active policy
 
 const POLICY_TYPE = "LEAVE";
@@ -116,17 +117,17 @@ exports.updatePolicy = async (id, body, user) => {
   });
 
   await policy.save();
-  if (user.companyId) {
-    invalidatePolicyCache("leave", user.companyId.toString());
-  }
+  invalidatePolicyCache("leave", policy.company_id.toString());
   return policy;
 };
 
 // ─── GET AVAILABLE LEAVE TYPES ────────────────────────────
-exports.getAvailableLeaveTypes = async (user) => {
+exports.getAvailableLeaveTypes = async (user, query = {}) => {
+  const scope = await resolveLeaveTypeScope(user, query, true);
   return LeaveType.find({
-    company_id: user.companyId,
+    ...scope,
     isActive:   true,
+    isDeleted:  false,
   }).select("_id name code isPaid isSystem description defaultDaysPerYear");
 };
 
@@ -137,20 +138,25 @@ exports.updateLeaveTypes = async (id, leaveTypes, user) => {
   if (policy.status === "archived") throw new AppError("Cannot update an archived policy", 400);
 
   // leaveTypeId se master data fetch karo
-  const linkedIds = leaveTypes.filter((t) => t.leaveTypeId).map((t) => t.leaveTypeId);
+  const linkedIds = [...new Set(
+    leaveTypes.filter((leaveType) => leaveType.leaveTypeId).map((leaveType) => leaveType.leaveTypeId.toString())
+  )];
   const masterMap = {};
 
   if (linkedIds.length > 0) {
     const masters = await LeaveType.find({
       _id:        { $in: linkedIds },
-      company_id: user.companyId,
+      org_id:     policy.org_id,
+      company_id: policy.company_id,
+      isActive:   true,
+      isDeleted:  false,
     }).select("name code isPaid defaultDaysPerYear");
 
     masters.forEach((m) => { masterMap[m._id.toString()] = m; });
 
-    // Validate all IDs exist
-    if (masters.length !== linkedIds.length) {
-      throw new AppError("One or more invalid leaveTypeId(s)", 400);
+    const invalidIds = linkedIds.filter((leaveTypeId) => !masterMap[leaveTypeId]);
+    if (invalidIds.length > 0) {
+      throw new AppError(`Invalid leaveTypeId(s): ${invalidIds.join(", ")}`, 400);
     }
   }
 
@@ -191,7 +197,7 @@ exports.updateLeaveTypes = async (id, leaveTypes, user) => {
   policy.version    = policy.version + 1;
   policy.updatedBy  = user.userId;
   await policy.save();
-  invalidatePolicyCache("leave", user.companyId.toString());
+  invalidatePolicyCache("leave", policy.company_id.toString());
   return policy;
 };
 
@@ -237,7 +243,7 @@ exports.activatePolicy = async (id, user) => {
   policy.updatedBy   = user.userId;
 
   await policy.save();
-  invalidatePolicyCache("leave", user.companyId.toString());
+  invalidatePolicyCache("leave", policy.company_id.toString());
 
   // NOTE: Balance seeding removed - balances are calculated dynamically from active policy
   // Employees will automatically have correct allocations based on policy.leaveTypes[].credit.totalPerYear
@@ -266,7 +272,7 @@ exports.deactivatePolicy = async (id, user) => {
   policy.updatedBy = user.userId;
 
   await policy.save();
-  invalidatePolicyCache("leave", user.companyId.toString());
+  invalidatePolicyCache("leave", policy.company_id.toString());
   return policy;
 };
 
@@ -291,7 +297,7 @@ exports.archivePolicy = async (id, user) => {
   policy.version    = policy.version + 1;
 
   await policy.save();
-  invalidatePolicyCache("leave", user.companyId.toString());
+  invalidatePolicyCache("leave", policy.company_id.toString());
   return policy;
 };
 
@@ -402,6 +408,6 @@ exports.restoreVersion = async (id, version, user) => {
   policy.updatedBy = user.userId;
 
   await policy.save();
-  invalidatePolicyCache("leave", user.companyId.toString());
+  invalidatePolicyCache("leave", policy.company_id.toString());
   return policy;
 };

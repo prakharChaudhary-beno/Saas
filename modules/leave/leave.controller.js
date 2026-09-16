@@ -8,7 +8,7 @@ const leaveRequestService = require("./leaveRequest.service");
 
 exports.create = async (req, res, next) => {
   try {
-    const result = await leaveService.create(req.body, req.user);
+    const result = await leaveService.create(req.body, req.user, req.query);
     res.status(201).json({ success: true, data: result });
   } catch (error) { next(error); }
 };
@@ -22,14 +22,14 @@ exports.getAll = async (req, res, next) => {
 
 exports.getOne = async (req, res, next) => {
   try {
-    const result = await leaveService.getOne(req.params.id, req.user);
+    const result = await leaveService.getOne(req.params.id, req.user, req.query);
     res.status(200).json({ success: true, data: result });
   } catch (error) { next(error); }
 };
 
 exports.update = async (req, res, next) => {
   try {
-    const result = await leaveService.update(req.params.id, req.body, req.user);
+    const result = await leaveService.update(req.params.id, req.body, req.user, req.query);
     res.status(200).json({ success: true, data: result });
   } catch (error) { next(error); }
 };
@@ -95,6 +95,14 @@ exports.updateLeaveStatus = async (req, res, next) => {
   try {
     const result = await leaveRequestService.updateLeaveStatus(req.params.id, req.body, req.user);
     res.status(200).json({ success: true, message: "Leave status updated", data: result });
+  } catch (err) { next(err); }
+};
+
+// DELETE /leave/types/:id
+exports.removeLeaveType = async (req, res, next) => {
+  try {
+    const result = await leaveService.remove(req.params.id, req.user, req.query);
+    res.status(200).json({ success: true, message: result.message });
   } catch (err) { next(err); }
 };
 

@@ -413,8 +413,8 @@ exports.updateEmployee = async (id, data, user) => {
     }
     const manager = await Employee.findOne({
       _id:        data.reportingManagerId,
-      org_id:     user.orgId,
-      company_id: user.companyId,
+      org_id:     employee.org_id,
+      company_id: employee.company_id,
       isDeleted:  false,
       status:     "ACTIVE"
     });
@@ -435,7 +435,7 @@ exports.updateEmployee = async (id, data, user) => {
     const Department = require("../department/department.model");
     const dept = await Department.findOne({
       _id:        data.departmentId,
-      company_id: user.companyId,
+      company_id: employee.company_id,
       isDeleted:  false
     });
     if (!dept) throw new AppError("Department not found", 404);
@@ -446,7 +446,7 @@ exports.updateEmployee = async (id, data, user) => {
     const Designation = require("../designation/designation.model");
     const desig = await Designation.findOne({
       _id:        data.designationId,
-      company_id: user.companyId,
+      company_id: employee.company_id,
       isDeleted:  false
     });
     if (!desig) throw new AppError("Designation not found", 404);

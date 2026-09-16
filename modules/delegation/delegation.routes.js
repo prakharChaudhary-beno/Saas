@@ -14,6 +14,7 @@ router.use(authenticate, checkTrial, checkFeature("horizontal_delegation"));
 
 // Specific routes BEFORE /:id
 router.get( "/received",      ctrl.getReceivedDelegations);
+router.get( "/eligible-delegatees", ctrl.getEligibleDelegatees);
 router.patch("/:id/revoke",   ctrl.revokeDelegation);
 router.patch("/:id/approve",  checkPermission("role.update"), ctrl.approveDelegation);
 router.patch("/:id/reject",   checkPermission("role.update"), ctrl.rejectDelegation);

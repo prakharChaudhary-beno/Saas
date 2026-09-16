@@ -16,7 +16,7 @@ const payrollPeriodLockSchema = new Schema({
   // ─── Scope ───────────────────────────────────────────────────
   org_id:     { type: Schema.Types.ObjectId, ref: "Organization", required: true, index: true },
   company_id: { type: Schema.Types.ObjectId, ref: "Company",      required: true, index: true },
-  unit_id:    { type: Schema.Types.ObjectId, ref: "Unit",         required: true, index: true },
+  unit_id:    { type: Schema.Types.ObjectId, ref: "Unit",         default: null, index: true },
 
   // ─── Period ──────────────────────────────────────────────────
   month: { type: Number, required: true }, // 1-12

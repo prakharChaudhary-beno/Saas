@@ -17,6 +17,7 @@ mongoose.connection.once('open', async () => {
   // the original was soft-deleted)
   const migrateDesignationIndexes = require('./modules/designation/migrations/dropDesignationNameIndex');
   await migrateDesignationIndexes();
+
 });
 
 const app = require('./app');

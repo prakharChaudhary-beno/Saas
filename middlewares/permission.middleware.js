@@ -57,10 +57,13 @@ const PLATFORM_MODULES = [
 // which is the actual module slug in DB. Same for roster.
 const MODULE_ALIAS = {
   attendancePolicy: "attendance",
+  regularisationPolicy: "attendance",
   leavePolicy:       "leave",
+  leaveType:         "leave",
   payrollPolicy:     "payroll",
   // Also map lowercase policy names (from permission slugs)
   attendancepolicy: "attendance",
+  regularisationpolicy: "attendance",
   leavepolicy:       "leave",
   payrollpolicy:     "payroll",
 };

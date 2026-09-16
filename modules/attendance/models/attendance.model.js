@@ -357,7 +357,7 @@ attendanceSchema.virtual("isPunchedIn").get(function () {
   return !!this.checkIn && !this.checkOut;
 });
 
-// ─── Pre-save Hook: Calculate workingHours, overtimeHours ─────────────────────
+// ─── Pre-save Hook: Validate and backfill workingHours ────────────────────────
 // Mongoose 9.x: Use async function without next parameter
 
 attendanceSchema.pre("save", async function () {
@@ -375,11 +375,8 @@ attendanceSchema.pre("save", async function () {
       this.workingHours = parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2));
     }
 
-    // Overtime (only positive) - fallback if not calculated
-    if (!this.overtimeHours || this.overtimeHours === 0) {
-      const extra = this.workingHours - this.standardHours;
-      this.overtimeHours = extra > 0 ? parseFloat(extra.toFixed(2)) : 0;
-    }
+    // overtimeHours is policy-driven and must be set by the service layer.
+    // In particular, an explicit zero can mean OT is disabled or below threshold.
   }
 
   // Date ko midnight pe normalize karo (service layer should use org timezone midnight)

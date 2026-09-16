@@ -6,12 +6,13 @@ const checkPermission  = require("../../middlewares/permission.middleware");
 const checkTrial = require("../../middlewares/checkTrial.middleware");
 const  validate  = require("../../middlewares/validate.middleware");
 const { createPolicySchema, updatePolicySchema, updateLeaveTypesSchema } = require("./leavePolicy.validation");
+const { leaveTypeScope } = require("../leave/leave.type.validation");
 const ctrl = require("./leavePolicy.controller");
 
 router.use(authenticate, checkTrial);
 
 // ── Helper: seeded leave types list (for HR to pick while building policy) ────
-router.get("/available-leave-types", checkPermission("leavePolicy.read"), ctrl.getAvailableLeaveTypes);
+router.get("/available-leave-types", checkPermission("leavePolicy.read"), validate(leaveTypeScope, "query"), ctrl.getAvailableLeaveTypes);
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 router.post(  "/",    checkPermission("leavePolicy.create"),    validate(createPolicySchema),    ctrl.createPolicy);

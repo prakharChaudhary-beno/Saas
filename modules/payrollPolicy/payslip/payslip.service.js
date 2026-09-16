@@ -12,34 +12,9 @@ const AppError  = require("../../../utils/appError");
 const { sendEmail }                = require("../../../utils/email/email");
 const { payslipPublishedTemplate } = require("../../../utils/email/templates/payslipEmail");
 const lockService = require("../payrollLock.service"); // Import lock service
+const { buildPayrollScope } = require("../payrollScope");
 
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
-
-// ─── Scope filter ─────────────────────────────────────────────
-const buildScope = (user) => {
-  const scope = { isDeleted: false };
-  const role  = user.role;
-
-  if (role === "SUPER_ADMIN") return scope;
-
-  scope.org_id = toObjId(user.orgId);
-
-  if (["org_admin", "org_auditor"].includes(role)) return scope;
-
-  scope.company_id = toObjId(user.companyId);
-
-  if (["company_admin", "company_hr_manager"].includes(role)) return scope;
-
-  // unit level — employee sees only own payslips
-  if (role === "employee") {
-    scope.company_id = toObjId(user.companyId);
-    // employee_id will be added per function
-    return scope;
-  }
-
-  if (user.unitId) scope.unit_id = toObjId(user.unitId);
-  return scope;
-};
 
 // ─────────────────────────────────────────────────────────────
 // GET MY PAYSLIPS (Employee self-service) — P-18
@@ -105,7 +80,7 @@ exports.getAllPayslips = async (query, user) => {
     page = 1, limit = 20,
   } = query;
 
-  const filter = buildScope(user);
+  const filter = buildPayrollScope(user);
   console.log('[PAYSLIP SERVICE] User:', user.role, '| unitId:', user.unitId);
   console.log('[PAYSLIP SERVICE] Filter BEFORE:', JSON.stringify(filter));
 
@@ -165,33 +140,26 @@ exports.getAllPayslips = async (query, user) => {
 // GET /api/v1/payslips/:id
 // ─────────────────────────────────────────────────────────────
 exports.getPayslipById = async (id, user) => {
-  const payslip = await Payslip.findOne({
-    _id:       toObjId(id),
-    isDeleted: false,
-  })
+  const filter = { _id: toObjId(id), ...buildPayrollScope(user) };
+
+  if (user.role === "employee") {
+    const employee = await Employee.findOne({
+      userId: toObjId(user.userId),
+      ...buildPayrollScope(user),
+    }).select("_id").lean();
+
+    if (!employee) throw new AppError("Employee record not found for your account", 404);
+    filter.employee_id = employee._id;
+    filter.status = { $in: ["PUBLISHED", "PAID"] };
+  }
+
+  const payslip = await Payslip.findOne(filter)
     .populate("employee_id", "name employeeId email unit_id departmentId designationId")
     .populate("generatedBy", "name email")
     .populate("approvedBy",  "name email")
     .lean();
 
   if (!payslip) throw new AppError("Payslip not found", 404);
-
-  // Scope check — employee can only see own payslip
-  if (user.role === "employee") {
-    const emp = await Employee.findOne({
-      userId:    toObjId(user.userId),
-      isDeleted: false,
-    }).select("_id").lean();
-
-    if (!emp || String(payslip.employee_id._id) !== String(emp._id)) {
-      throw new AppError("You can only view your own payslip", 403);
-    }
-
-    // Employee cannot see DRAFT
-    if (payslip.status === "DRAFT") {
-      throw new AppError("Payslip not yet published", 404);
-    }
-  }
 
   return payslip;
 };
@@ -204,8 +172,8 @@ exports.getPayslipById = async (id, user) => {
 // ─────────────────────────────────────────────────────────────
 exports.publishPayslip = async (id, user) => {
   const payslip = await Payslip.findOne({
-    _id:       toObjId(id),
-    isDeleted: false,
+    _id: toObjId(id),
+    ...buildPayrollScope(user),
   }).populate("employee_id", "name employeeId email userId unit_id org_id");
 
   if (!payslip) throw new AppError("Payslip not found", 404);
@@ -215,18 +183,14 @@ exports.publishPayslip = async (id, user) => {
     payslip.month,
     payslip.year,
     payslip.org_id || user.orgId,
-    payslip.unit_id
+    payslip.unit_id,
+    payslip.company_id
   );
-  if (isLocked) {
+  if (!isLocked) {
     throw new AppError(
-      `Cannot publish payslip: Payroll period ${payslip.month}/${payslip.year} is locked. Please unlock the period first.`,
+      `Cannot publish payslip: Payroll period ${payslip.month}/${payslip.year} must be locked first.`,
       423
     );
-  }
-
-  // Scope check
-  if (user.companyId && String(payslip.company_id) !== String(user.companyId)) {
-    throw new AppError("Access denied", 403);
   }
 
   if (payslip.status !== "DRAFT") {
@@ -328,11 +292,12 @@ exports.publishAllPayslips = async (body, user) => {
     Number(month),
     Number(year),
     user.orgId,
-    user.unitId
+    user.unitId,
+    user.companyId
   );
-  if (isLocked) {
+  if (!isLocked) {
     throw new AppError(
-      `Cannot publish payslips: Payroll period ${month}/${year} is locked. Please unlock the period first.`,
+      `Cannot publish payslips: Payroll period ${month}/${year} must be locked first.`,
       423
     );
   }
@@ -414,15 +379,11 @@ exports.markAsPaid = async (id, body, user) => {
   const { paymentDate, paymentMode, transactionRef } = body;
 
   const payslip = await Payslip.findOne({
-    _id:       toObjId(id),
-    isDeleted: false,
+    _id: toObjId(id),
+    ...buildPayrollScope(user),
   });
 
   if (!payslip) throw new AppError("Payslip not found", 404);
-
-  if (String(payslip.company_id) !== String(user.companyId)) {
-    throw new AppError("Access denied", 403);
-  }
 
   if (payslip.status !== "PUBLISHED") {
     throw new AppError("Only PUBLISHED payslips can be marked as PAID", 400);
@@ -443,9 +404,8 @@ exports.markAsPaid = async (id, body, user) => {
 // ─────────────────────────────────────────────────────────────
 exports.deletePayslip = async (id, user) => {
   const payslip = await Payslip.findOne({
-    _id:        toObjId(id),
-    company_id: toObjId(user.companyId),
-    isDeleted:  false,
+    _id: toObjId(id),
+    ...buildPayrollScope(user),
   });
 
   if (!payslip) throw new AppError("Payslip not found", 404);

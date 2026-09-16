@@ -1,11 +1,11 @@
 const designationService = require("./designation.service");
 
-exports.create = async (req, res) => {
+exports.create = async (req, res, next) => {
   try {
-
     const designation = await designationService.createDesignation(
       req.body,
-      req.user
+      req.user,
+      req.query
     );
 
     res.status(201).json({
@@ -13,44 +13,30 @@ exports.create = async (req, res) => {
       data: designation
     });
 
-  } catch (error) {
-
-    res.status(400).json({
-      success: false,
-      message: error.message
-    });
-
-  }
+  } catch (error) { next(error); }
 };
 
 
-exports.list = async (req, res) => {
+exports.list = async (req, res, next) => {
   try {
-
-    const designations = await designationService.getDesignations(req.user);
+    const designations = await designationService.getDesignations(req.user, req.query);
 
     res.json({
       success: true,
       data: designations
     });
 
-  } catch (error) {
-
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-
-  }
+  } catch (error) { next(error); }
 };
 
 
-exports.getById = async (req, res) => {
+exports.getById = async (req, res, next) => {
   try {
 
     const designation = await designationService.getDesignationById(
       req.params.id,
-      req.user
+      req.user,
+      req.query
     );
 
     res.json({
@@ -58,24 +44,18 @@ exports.getById = async (req, res) => {
       data: designation
     });
 
-  } catch (error) {
-
-    res.status(404).json({
-      success: false,
-      message: error.message
-    });
-
-  }
+  } catch (error) { next(error); }
 };
 
 
-exports.update = async (req, res) => {
+exports.update = async (req, res, next) => {
   try {
 
     const designation = await designationService.updateDesignation(
       req.params.id,
       req.body,
-      req.user
+      req.user,
+      req.query
     );
 
     res.json({
@@ -83,23 +63,17 @@ exports.update = async (req, res) => {
       data: designation
     });
 
-  } catch (error) {
-
-    res.status(400).json({
-      success: false,
-      message: error.message
-    });
-
-  }
+  } catch (error) { next(error); }
 };
 
 
-exports.delete = async (req, res) => {
+exports.delete = async (req, res, next) => {
   try {
 
     const result = await designationService.deleteDesignation(
       req.params.id,
-      req.user
+      req.user,
+      req.query
     );
 
     res.json({
@@ -107,12 +81,5 @@ exports.delete = async (req, res) => {
       message: result.message
     });
 
-  } catch (error) {
-
-    res.status(400).json({
-      success: false,
-      message: error.message
-    });
-
-  }
+  } catch (error) { next(error); }
 };

@@ -53,6 +53,7 @@ const { seedPermissions } = require('../seeders/permission.Seeder');
 const { seedModules }     = require('../seeders/module.Seeders');
 const { seedPlans }       = require('../seeders/plan.Seeder');
 const { seedHolidays }    = require('../seeders/holiday.Seeders');
+const migrateLeaveTypeIndexes = require('../modules/leave/migrations/migrateLeaveTypeIndexes');
 
 // ── Serverless-safe connection caching ──────────────────────────
 // Vercel spins up fresh function instances per request/cold-start.
@@ -116,6 +117,7 @@ const connectDB = async () => {
     await seedPermissions();
     await seedRoles();
     await seedHolidays();
+    await migrateLeaveTypeIndexes();
   }
 
   return cached.conn;

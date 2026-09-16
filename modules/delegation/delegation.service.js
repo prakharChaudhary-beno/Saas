@@ -35,6 +35,80 @@ const MAX_DELEGATION_DAYS = 90;
 
 // ─── Scope level hierarchy ────────────────────────────────────
 const LEVEL_ORDER = { org: 3, company: 2, unit: 1 };
+const ROLE_ORDER = {
+  org_admin: 90,
+  org_auditor: 85,
+  company_admin: 80,
+  company_hr_manager: 70,
+  unit_admin: 60,
+  hr_manager: 50,
+  manager: 40,
+  employee: 10,
+};
+const USER_CLASS_ORDER = { Administrative: 3, Privilege: 2, General: 1 };
+
+const getRoleOrder = (role) => ROLE_ORDER[role?.slug]
+  ?? USER_CLASS_ORDER[role?.userClass]
+  ?? 0;
+
+const isPeerOrHigherRole = (delegatorRole, delegateeRole) => {
+  const delegatorLevel = LEVEL_ORDER[delegatorRole.level] || 0;
+  const delegateeLevel = LEVEL_ORDER[delegateeRole.level] || 0;
+
+  if (delegateeLevel !== delegatorLevel) return delegateeLevel > delegatorLevel;
+  return getRoleOrder(delegateeRole) >= getRoleOrder(delegatorRole);
+};
+
+const getEmployeeByUserId = (userId, orgId) => Employee.findOne({
+  userId: toObjId(userId),
+  org_id: toObjId(orgId),
+  isDeleted: false,
+}).select("_id reportingManagerId").lean();
+
+const isSubordinate = async (managerUserId, candidateUserId, orgId) => {
+  const [managerEmployee, candidateEmployee] = await Promise.all([
+    getEmployeeByUserId(managerUserId, orgId),
+    getEmployeeByUserId(candidateUserId, orgId),
+  ]);
+
+  if (!managerEmployee || !candidateEmployee) return false;
+
+  let currentManagerId = candidateEmployee.reportingManagerId;
+  const visited = new Set();
+
+  while (currentManagerId) {
+    const currentId = currentManagerId.toString();
+    if (currentId === managerEmployee._id.toString()) return true;
+    if (visited.has(currentId)) return false;
+
+    visited.add(currentId);
+    const currentManager = await Employee.findOne({
+      _id: currentManagerId,
+      org_id: toObjId(orgId),
+      isDeleted: false,
+    }).select("reportingManagerId").lean();
+    currentManagerId = currentManager?.reportingManagerId || null;
+  }
+
+  return false;
+};
+
+const validateHorizontalRelationship = async (delegatorRole, delegateeUser, user) => {
+  if (await isSubordinate(user.userId, delegateeUser._id, user.orgId)) {
+    throw new AppError(
+      "Cannot delegate to subordinates. Use vertical delegation or subordinate already has access through role.",
+      403
+    );
+  }
+
+  const delegateeRole = await Role.findById(delegateeUser.roleId)
+    .select("level slug userClass")
+    .lean();
+
+  if (!delegateeRole || !isPeerOrHigherRole(delegatorRole, delegateeRole)) {
+    throw new AppError("Horizontal delegation is limited to peers or higher-level users", 403);
+  }
+};
 
 // ─── Helper: get delegator's role + permissions ───────────────
 const getDelegatorRole = async (userId, orgId, companyId) => {
@@ -42,7 +116,7 @@ const getDelegatorRole = async (userId, orgId, companyId) => {
   if (!user?.roleId) throw new AppError("User role not found", 404);
 
   const role = await Role.findById(user.roleId)
-    .select("permissions level slug")
+    .select("permissions level slug userClass")
     .populate("permissions", "name slug scope label")
     .lean();
 
@@ -102,6 +176,10 @@ exports.createDelegation = async (payload, user) => {
   const targetUnitId = unit_id || user.unitId;
   if (!targetUnitId) throw new AppError("unit_id is required", 400);
 
+  if (!delegatee_id || !mongoose.isValidObjectId(delegatee_id)) {
+    throw new AppError("A valid delegatee_id is required", 400);
+  }
+
   // Cannot delegate to self
   if (delegatee_id.toString() === user.userId.toString()) {
     throw new AppError("You cannot delegate permissions to yourself", 400);
@@ -131,12 +209,17 @@ exports.createDelegation = async (payload, user) => {
     _id:      toObjId(delegatee_id),
     org_id:   toObjId(user.orgId),
     status:   "ACTIVE",
-    
-  }).select("_id name email").lean();
+    is_deleted: false,
+  }).select("_id name email roleId company_id").lean();
   if (!delegateeUser) throw new AppError("Delegatee user not found or inactive", 404);
+
+  if (user.companyId && delegateeUser.company_id?.toString() !== user.companyId.toString()) {
+    throw new AppError("Delegatee must belong to your company", 403);
+  }
 
   // Get delegator's role + permissions
   const delegatorRole = await getDelegatorRole(user.userId, user.orgId, user.companyId);
+  await validateHorizontalRelationship(delegatorRole, delegateeUser, user);
   const delegatorPermIds = new Set(
     (delegatorRole.permissions || []).map((p) => p._id.toString())
   );
@@ -207,7 +290,7 @@ exports.createDelegation = async (payload, user) => {
   const overlap = await Delegation.findOne({
     delegator_id: toObjId(user.userId),
     delegatee_id: toObjId(delegatee_id),
-    permissions:  { $in: permissionIds.map(toObjId) },
+    permissions:  { $in: permDocs.map((permission) => permission._id) },
     status:       { $in: ["ACTIVE", "PENDING"] },
     startDate:    { $lte: end },
     endDate:      { $gte: start },
@@ -281,7 +364,7 @@ exports.createDelegation = async (payload, user) => {
   // ── In-App Notification to Delegatee ──
   // Matrix Requirement: Permission delegated to you (🔔+📧) Priority: 🟡 Important
   try {
-    const sendNotification = require("../../utils/sendNotification");
+    const { sendNotification } = require("../../utils/sendNotification");
     await sendNotification({
       type:          "DELEGATION_RECEIVED",
       userId:        delegatee_id,
@@ -306,6 +389,42 @@ exports.createDelegation = async (payload, user) => {
   }
 
   return delegation;
+};
+
+// ─── GET ELIGIBLE DELEGATEES ────────────────────────────────
+// GET /delegations/eligible-delegatees
+exports.getEligibleDelegatees = async (user) => {
+  const delegatorRole = await getDelegatorRole(user.userId, user.orgId, user.companyId);
+
+  const candidates = await Employee.find({
+    org_id: toObjId(user.orgId),
+    ...(user.companyId ? { company_id: toObjId(user.companyId) } : {}),
+    userId: { $ne: null },
+    status: "ACTIVE",
+    isDeleted: false,
+  })
+    .select("name email employeeId departmentId unit_id userId reportingManagerId")
+    .populate("userId", "name email status roleId")
+    .populate("departmentId", "name")
+    .populate("unit_id", "name")
+    .lean();
+
+  const eligibleCandidates = [];
+  for (const candidate of candidates) {
+    const candidateUser = candidate.userId;
+    if (!candidateUser || candidateUser.status !== "ACTIVE") continue;
+    if (candidateUser._id.toString() === user.userId.toString()) continue;
+    if (await isSubordinate(user.userId, candidateUser._id, user.orgId)) continue;
+
+    const candidateRole = await Role.findById(candidateUser.roleId)
+      .select("level slug userClass")
+      .lean();
+    if (!candidateRole || !isPeerOrHigherRole(delegatorRole, candidateRole)) continue;
+
+    eligibleCandidates.push(candidate);
+  }
+
+  return eligibleCandidates;
 };
 
 // ─── GET MY DELEGATIONS (sent) ───────────────────────────────
@@ -390,7 +509,7 @@ exports.getDelegationById = async (id, user) => {
   ].filter(Boolean);
 
   const isHR = ["hr_manager","company_hr_manager","unit_admin","company_admin","org_admin"]
-    .includes(user.roleSlug);
+    .includes(user.role);
 
   if (!isHR && !allowedIds.includes(user.userId.toString())) {
     throw new AppError("You are not authorized to view this delegation", 403);
@@ -413,7 +532,7 @@ exports.revokeDelegation = async (id, payload, user) => {
 
   // Auth check
   const isHR = ["hr_manager","company_hr_manager","unit_admin","company_admin","org_admin"]
-    .includes(user.roleSlug);
+    .includes(user.role);
   const isDelegator = delegation.delegator_id.toString() === user.userId.toString();
 
   if (!isHR && !isDelegator) {
@@ -467,7 +586,7 @@ exports.revokeDelegation = async (id, payload, user) => {
   // ── In-App Notification to Delegatee ──
   // Matrix Requirement: Delegation revoked (🔔) Priority: 🟢 Informational
   try {
-    const sendNotification = require("../../utils/sendNotification");
+    const { sendNotification } = require("../../utils/sendNotification");
     await sendNotification({
       type:          "DELEGATION_REVOKED",
       userId:        delegation.delegatee_id,

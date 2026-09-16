@@ -15,7 +15,7 @@ const Company = require("../company/models/company.model");
 // ── Plan modules → permission module mapping ──────────────────
 const MODULE_MAP = {
   employee:      ["employee"],
-  attendance:    ["attendance"],
+  attendance:    ["attendance", "attendancePolicy", "regularisationPolicy"],
   leave:         ["leave"],
   payroll:       ["payroll"],
   organisation:  ["organisation", "org", "lob", "unit", "company"],
@@ -31,6 +31,7 @@ const MODULE_MAP = {
   biometric:     ["biometric"],
   leavePolicy:        ["leavePolicy"],
   attendancePolicy:   ["attendancePolicy"],
+  regularisationPolicy: ["regularisationPolicy"],
   payrollPolicy:      ["payrollPolicy"],
   holiday:            ["holiday"],
   department:         ["department"],

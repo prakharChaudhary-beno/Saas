@@ -23,6 +23,21 @@ const ALLOWED_SCOPES = {
   unit:    ["unit"],
 };
 
+const buildHolderScopeFilter = (user) => {
+  if (user.role === "SUPER_ADMIN") return {};
+
+  const filter = { org_id: user.orgId };
+
+  if (user.level === "company") {
+    filter.company_id = user.companyId;
+  } else if (user.level === "unit") {
+    filter.company_id = user.companyId;
+    filter.unit_id = user.unitId;
+  }
+
+  return filter;
+};
+
 // ─── Validate permissions against user level ──────────────────
 const validatePermissionScope = (permDocs, userLevel) => {
   if (!userLevel || userLevel === "SUPER_ADMIN") return; // Super Admin — no restriction
@@ -115,12 +130,18 @@ exports.createRole = async (payload, user) => {
 //   }).populate("permissions", "name slug module scope");
 // };
 exports.getRoles = async (user) => {
+  const holderScopeFilter = buildHolderScopeFilter(user);
+
   if (user.role === "SUPER_ADMIN") {
     const roles = await Role.find({ isDeleted: false })
       .populate("permissions", "name slug module scope").lean();
     // T-05 — holder count
     for (const r of roles) {
-      r.holderCount = await User.countDocuments({ roleId: r._id, is_deleted: false });
+      r.holderCount = await User.countDocuments({
+        roleId: r._id,
+        is_deleted: false,
+        ...holderScopeFilter,
+      });
     }
     return roles;
   }
@@ -147,7 +168,11 @@ exports.getRoles = async (user) => {
     .populate("permissions", "name slug module scope").lean();
   // T-05 — holder count
   for (const r of roles) {
-    r.holderCount = await User.countDocuments({ roleId: r._id, is_deleted: false });
+    r.holderCount = await User.countDocuments({
+      roleId: r._id,
+      is_deleted: false,
+      ...holderScopeFilter,
+    });
   }
   return roles;
 };

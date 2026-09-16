@@ -26,12 +26,15 @@ exports.seedRoles = async () => {
     }
 
     // Helper — get permission ObjectIds by slugs
+    const permissionsBySlug = new Map(
+      allPerms.map((permission) => [permission.slug.toLowerCase(), permission._id])
+    );
     const getIds = (slugs) => {
       const ids = [];
       for (const slug of slugs) {
-        const found = allPerms.find((p) => p.slug === slug);
-        if (found) {
-          ids.push(found._id);
+        const permissionId = permissionsBySlug.get(slug.toLowerCase());
+        if (permissionId) {
+          ids.push(permissionId);
         } else {
           console.warn(`  ⚠️  Permission not found: "${slug}"`);
         }
@@ -134,7 +137,7 @@ const readOnlySlugs = allSlugs.filter(
           "employee.create", "employee.read", "employee.update", "employee.delete",
           "attendance.create", "attendance.read", "attendance.update", "attendance.approve",
           "leave.create", "leave.read", "leave.update", "leave.approve",
-          "leaveType.read",
+          "leaveType.create", "leaveType.read", "leaveType.update", "leaveType.delete",
           "payroll.read", "payroll.run",
           "department.read",
           "designation.read",
@@ -163,7 +166,7 @@ const readOnlySlugs = allSlugs.filter(
           "employee.create", "employee.read", "employee.update", "employee.delete",
           "attendance.create", "attendance.read", "attendance.update", "attendance.approve",
           "leave.create", "leave.read", "leave.update", "leave.approve",
-          "leaveType.read",
+          "leaveType.create", "leaveType.read", "leaveType.update", "leaveType.delete",
           "payroll.read", "payroll.run",
           "department.read",
           "designation.read",

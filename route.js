@@ -49,7 +49,7 @@ const delegationRoutes = require("./modules/delegation/delegation.routes");
 const regularisationPolicyRoutes = require("./modules/attendance/regularisationPolicy.routes");
 const policyVersionRoutes       = require("./modules/policyVersion/policyVersion.routes");
 const biometricRoutes           = require("./modules/biometric/biometric.routes");
-const subscriptionRoutes        = require("./modules/subscription/subscription.route");
+const subscriptionRouter        = require("./modules/subscription/subscription.route");
 
 router.use("/auth",         authRoutes);
 router.use("/auth/mfa",     mfaRoutes);
@@ -99,7 +99,7 @@ router.use("/modules",          moduleRoutes);
 router.use("/shifts",       shiftRoutes);
 router.use("/rosters",      rosterRoutes);
 router.use("/shift-swaps",  shiftSwapRoutes);
-router.use("/subscriptions", subscriptionRoutes);
+router.use("/subscriptions", subscriptionRouter);
 
 module.exports = router;
 router.use("/delegations",  delegationRoutes);

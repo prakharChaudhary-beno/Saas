@@ -514,17 +514,23 @@ exports.updateUser = async (id, data, currentUser) => {
   });
   if (!user) throw new AppError("User not found", 404);
 
-  // Self-update block
-  if (user._id.toString() === currentUser.userId) {
-    throw new AppError("You cannot update your own account from here", 400);
-  }
-
   // Role change track
   const roleChanged = data.roleId &&
     data.roleId.toString() !== user.roleId?.toString();
   const fromRoleId  = user.roleId || null;
 
+  // Self-service profile edits are allowed, but privilege and account-state
+  // changes must be performed by another authorized administrator.
+  if (user._id.toString() === currentUser.userId) {
     if (roleChanged) {
+      throw new AppError("You cannot change your own role", 403);
+    }
+    if (data.status && data.status !== user.status) {
+      throw new AppError("You cannot change your own account status", 403);
+    }
+  }
+
+  if (roleChanged) {
     const newRole = await Role.findById(data.roleId).select("slug level").lean();
     
     if (!newRole) {

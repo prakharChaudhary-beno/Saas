@@ -275,6 +275,8 @@ router.patch("/:id/status",   authenticate,
   employeeController.changeStatus
 );
 
+router.get("/me/documents/:docId/download", authenticate, employeeController.downloadMyDocument);
+
 // ── Employee Timeline ────────────────────────────────────────────────────────
 // GET /api/v1/employees/:id/timeline - Career progression timeline
 const timelineRoutes = require("./employeeTimeline.routes");

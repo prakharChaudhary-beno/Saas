@@ -152,3 +152,10 @@ exports.getLeaveLiabilityReport = async (req, res, next) => {
     res.status(200).json({ success: true, data: result });
   } catch (error) { next(error); }
 };
+
+exports.editLeaveRequest = async (req, res, next) => {
+  try {
+    const result = await leaveRequestService.editLeaveRequest(req.params.id, req.body, req.user);
+    res.json({ success: true, message: "Leave request updated", data: result });
+  } catch (error) { next(error); }
+};

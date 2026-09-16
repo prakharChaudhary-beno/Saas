@@ -1666,3 +1666,72 @@ exports.cancelLeaveRequest = async (id, user) => {
 
   return { message: "Leave request cancelled successfully" };
 };
+
+exports.editLeaveRequest = async (id, payload, user) => {
+  const { leaveTypeId, startDate, endDate, isHalfDay, session, reason } = payload;
+
+  const request = await LeaveRequest.findOne({
+    _id:        id,
+    userId:     user.userId,
+    org_id:     user.orgId,
+    company_id: user.companyId,
+  });
+  if (!request) throw new AppError("Leave request not found", 404);
+
+  if (!["PENDING", "UNDER_REVIEW"].includes(request.status)) {
+    throw new AppError(`Cannot edit — request is already ${request.status}`, 400);
+  }
+
+  let leaveType = null;
+  if (leaveTypeId) {
+    leaveType = await LeaveType.findOne({
+      _id: leaveTypeId, company_id: user.companyId, isActive: true, isDeleted: false,
+    });
+    if (!leaveType) throw new AppError("Leave type not found or inactive", 404);
+  }
+
+  const start = new Date(startDate || request.startDate);
+  const end   = new Date(endDate   || request.endDate);
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  if (start < today) throw new AppError("Cannot set leave for past dates", 400);
+  if (end < start)   throw new AppError("End date cannot be before start date", 400);
+
+  let totalDays;
+  const halfDay = isHalfDay ?? request.isHalfDay;
+  if (halfDay) {
+    if (start.getTime() !== end.getTime())
+      throw new AppError("Start and end date must be same for half day", 400);
+    totalDays = 0.5;
+  } else {
+    totalDays = calcWorkingDays(start, end);
+    if (totalDays === 0) throw new AppError("No working days in selected date range", 400);
+  }
+
+  const overlap = await LeaveRequest.findOne({
+    _id:        { $ne: request._id },
+    employeeId: request.employeeId,
+    status:     { $in: ["PENDING", "UNDER_REVIEW", "APPROVED"] },
+    startDate:  { $lte: end },
+    endDate:    { $gte: start },
+  });
+  if (overlap) throw new AppError("Overlapping leave request already exists for these dates", 409);
+
+  if (leaveTypeId) request.leaveTypeId = leaveTypeId;
+  request.startDate = start;
+  request.endDate   = end;
+  request.isHalfDay = halfDay;
+  if (session) request.session = session;
+  if (reason)  request.reason  = reason;
+  request.totalDays = totalDays;
+  request.editedAt  = new Date();
+  request.editedBy  = user.userId;
+  request.status     = "PENDING";
+  request.l1Status   = null;
+  request.l2ActionAt = null;
+
+  await request.save();
+  return request;
+};

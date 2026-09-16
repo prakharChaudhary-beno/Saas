@@ -94,6 +94,13 @@ router.patch(
   leaveController.toggleStatus
 );
 
+ // PATCH /leave/:id/edit — employee apni pending leave edit kare
+ router.patch(
+  "/:id/edit",
+ checkPermission("leave.create"),
+ leaveController.editLeaveRequest
+);
+
 // PATCH /leave/:id  — approve / reject
 router.patch(
   "/:id",

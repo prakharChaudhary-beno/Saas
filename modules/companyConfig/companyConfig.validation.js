@@ -76,6 +76,7 @@ const configSchema = Joi.object({
 
   // Integrations
   googleMapsApiKey: Joi.string().trim().optional().allow(null, ""),
-});
+
+   }).unknown(true); // don't hard-fail on fields not yet modeled here
 
 module.exports = { configSchema };

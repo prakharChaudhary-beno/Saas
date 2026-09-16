@@ -77,6 +77,7 @@ exports.getPlanById = async (planId) => {
   const plan = await Plan.findOne({
     _id:        planId,
     status:     "Active",
+    is_public:  true,
     is_deleted: false,
   }).populate("modules", "name slug description");
 

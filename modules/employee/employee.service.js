@@ -107,6 +107,13 @@ const hasCircularChain = async (employeeId, managerId, maxDepth = 10) => {
 // ─── CREATE EMPLOYEE ──────────────────────────────────────────
 exports.createEmployee = async (payload, user) => {
   const { email, salary, departmentId, designationId, reportingManagerId, unit_id } = payload;
+  if (designationId) {
+  const Designation = require("../designation/designation.model");
+   const desig = await Designation.findOne({
+   _id: designationId, company_id: user.companyId, isDeleted: false, status: "active",
+  });
+  if (!desig) throw new AppError("Designation not found or inactive", 404);
+  }
 
   // unit_id — from payload or from user context
   const employeeUnitId = unit_id || user.unitId;
@@ -446,10 +453,11 @@ exports.updateEmployee = async (id, data, user) => {
     const Designation = require("../designation/designation.model");
     const desig = await Designation.findOne({
       _id:        data.designationId,
-      company_id: employee.company_id,
-      isDeleted:  false
+      company_id: user.companyId,
+      isDeleted:  false,
+      status:     "active",
     });
-    if (!desig) throw new AppError("Designation not found", 404);
+  if (!desig) throw new AppError("Designation not found or inactive", 404);
   }
 
   // Salary recalculate
@@ -783,6 +791,32 @@ exports.getMyDocuments = async (user) => {
   })
     .select("-__v")
     .sort({ createdAt: -1 });
+};
+
+
+exports.downloadMyDocument = async (docId, user) => {
+  const employee = await Employee.findOne({
+    userId:    user.userId,
+    org_id:    user.orgId,
+    isDeleted: false,
+  }).select("_id").lean();
+
+  if (!employee) throw new AppError("Employee profile not found", 404);
+
+  const doc = await EmployeeDocument.findOne({
+    _id:        docId,
+    employeeId: employee._id,   // 🔒 security: apna hi document milega
+    isDeleted:  false,
+  }).lean();
+
+  if (!doc) throw new AppError("Document not found", 404);
+
+  // Cloudinary "fl_attachment" flag force-downloads instead of opening inline
+  const downloadUrl = doc.url.includes("cloudinary.com")
+    ? doc.url.replace("/upload/", "/upload/fl_attachment/")
+    : doc.url;
+
+  return downloadUrl;
 };
 
 // ─── E-10: PROFILE COMPLETION INDICATOR ──────────────────────

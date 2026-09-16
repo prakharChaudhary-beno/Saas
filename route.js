@@ -108,6 +108,8 @@ router.use("/policy-versions", policyVersionRoutes);
 
 // ── Biometric Integration ─────────────────────────────────────────────────
 router.use("/biometric", biometricRoutes);
+const subscriptionRoutes = require("./modules/subscription/subscription.routes");
+router.use("/subscription", subscriptionRoutes);
 
 // ── Global Search ──────────────────────────────────────────────────────────
 const searchRoutes = require("./modules/search/search.routes");

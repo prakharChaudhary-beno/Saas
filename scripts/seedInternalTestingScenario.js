@@ -180,6 +180,17 @@ const PEOPLE = [
     jobRole: "Backend Developer",
     reportsTo: "rajat",
   },
+  {
+    key: "anuranjan",
+    name: "Anuranjan Singh",
+    email: `anuranjan.singh@${TEST_EMAIL_DOMAIN}`,
+    phone: "9000000013",
+    role: "manager",
+    employeeId: "TSH-BT-013",
+    department: "Sales",
+    jobRole: "Business Development Head",
+    reportsTo: "lawrance",
+  },
 ];
 
 async function findOrCreate(Model, filter, values) {
@@ -516,6 +527,7 @@ async function seedInternalTestingScenario() {
     Marketing: "manoj",
     "Business Development": "manoj",
     "Finance & Accounts": "lawrance",
+    Sales: "anuranjan",
   };
   await Promise.all(Object.entries(departmentHeads).map(([departmentName, personKey]) =>
     Department.updateOne(

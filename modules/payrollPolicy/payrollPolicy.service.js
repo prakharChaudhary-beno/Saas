@@ -6,19 +6,61 @@
 //           + applicableFor.designations populate.
 
 const PayrollPolicy = require("./models/payrollPolicy.model");
+const Company       = require("../company/models/company.model");
+const Unit          = require("../unit/models/unit.model");
 const AppError      = require("../../utils/appError");
 const { invalidatePolicyCache } = require("../../utils/policyResolver");
 const policyVersionService = require("../policyVersion/policyVersion.service");
 
 const POLICY_TYPE = "PAYROLL";
 
+const resolvePolicyScope = async (user, query = {}) => {
+  const requestedOrgId = query.orgId;
+  const requestedCompanyId = query.companyId;
+  const requestedUnitId = query.unit_id;
+
+  if (user.orgId && requestedOrgId && user.orgId.toString() !== requestedOrgId) {
+    throw new AppError("Organization access denied", 403);
+  }
+  if (user.companyId && requestedCompanyId && user.companyId.toString() !== requestedCompanyId) {
+    throw new AppError("Company access denied", 403);
+  }
+  if (user.unitId && requestedUnitId && user.unitId.toString() !== requestedUnitId) {
+    throw new AppError("Unit access denied", 403);
+  }
+
+  const orgId = user.orgId || requestedOrgId;
+  const companyId = user.companyId || requestedCompanyId;
+  const unitId = user.unitId || requestedUnitId;
+
+  if (!orgId || !companyId) {
+    throw new AppError("Organization and company scope are required", 400);
+  }
+
+  const companyExists = await Company.exists({ _id: companyId, org_id: orgId, is_deleted: false });
+  if (!companyExists) throw new AppError("Company not found in selected organization", 404);
+
+  if (unitId) {
+    const unitExists = await Unit.exists({
+      _id: unitId,
+      org_id: orgId,
+      company_id: companyId,
+      is_deleted: false,
+    });
+    if (!unitExists) throw new AppError("Unit not found in selected organization and company", 404);
+  }
+
+  return { orgId, companyId, unitId };
+};
+
 // ─── Create Policy ────────────────────────────────────────────────────────────
-exports.createPolicy = async (body, user) => {
+exports.createPolicy = async (body, user, query = {}) => {
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
 
   // Guard: duplicate name (case-insensitive) within tenant
   const nameExists = await PayrollPolicy.findOne({
-org_id:     user.orgId,
-    company_id: user.companyId,
+    org_id:     orgId,
+    company_id: companyId,
     name:      { $regex: new RegExp(`^${body.name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
     isDeleted: false,
   });
@@ -31,7 +73,7 @@ org_id:     user.orgId,
 
   // Guard: only one ACTIVE policy can apply to the same scope
   if (body.status === "active") {
-    await _checkScopeConflict(null, body, user.companyId);
+    await _checkScopeConflict(null, body, companyId);
   }
 
   // Auto-populate ptSlabs from ptState if PT is enabled
@@ -49,9 +91,9 @@ org_id:     user.orgId,
 
   const policy = await PayrollPolicy.create({
     ...body,
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    unit_id:    user.unitId || null,
+    org_id:     orgId,
+    company_id: companyId,
+    unit_id:    unitId || null,
     version:   1,
     createdBy: user.userId,
     updatedBy: user.userId,
@@ -71,8 +113,9 @@ org_id:     user.orgId,
 
 // ─── Get All Policies ─────────────────────────────────────────────────────────
 exports.getPolicies = async (user, query = {}) => {
-  const filter = { org_id: user.orgId, company_id: user.companyId };
-  if (user.unitId) filter.unit_id = user.unitId;
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
+  const filter = { org_id: orgId, company_id: companyId };
+  if (unitId) filter.unit_id = unitId;
 
   if (query.status)           filter.status = query.status;
   if (query.employmentType)   filter["applicableFor.employmentTypes"] = query.employmentType;
@@ -109,10 +152,11 @@ exports.getPolicies = async (user, query = {}) => {
 };
 
 // ─── Get Policy By ID ─────────────────────────────────────────────────────────
-exports.getPolicyById = async (id, user) => {
+exports.getPolicyById = async (id, user, query = {}) => {
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
   // Enterprise: Strict unit isolation
-  const filter = { _id: id, org_id: user.orgId, company_id: user.companyId };
-  if (user.unitId) filter.unit_id = user.unitId;
+  const filter = { _id: id, org_id: orgId, company_id: companyId };
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await PayrollPolicy.findOne(filter)
     .populate("applicableFor.departments",  "name")
@@ -127,10 +171,11 @@ exports.getPolicyById = async (id, user) => {
 };
 
 // ─── Update Policy ────────────────────────────────────────────────────────────
-exports.updatePolicy = async (id, body, user) => {
+exports.updatePolicy = async (id, body, user, query = {}) => {
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
   // Enterprise: Strict unit isolation
-  const filter = { _id: id, org_id: user.orgId, company_id: user.companyId };
-  if (user.unitId) filter.unit_id = user.unitId;
+  const filter = { _id: id, org_id: orgId, company_id: companyId };
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await PayrollPolicy.findOne(filter);
   if (!policy) throw new AppError("Payroll policy not found", 404);
@@ -141,7 +186,7 @@ exports.updatePolicy = async (id, body, user) => {
 
   // Scope conflict check if activating via update
   if (body.status === "active" && policy.status !== "active") {
-    await _checkScopeConflict(id, body, user.companyId);
+    await _checkScopeConflict(id, body, companyId);
   }
 
   // ── Save snapshot of CURRENT state BEFORE applying changes ────────────────
@@ -190,15 +235,16 @@ exports.updatePolicy = async (id, body, user) => {
   policy.updatedBy = user.userId;
 
   await policy.save();
-  invalidatePolicyCache("payroll", user.companyId.toString());
+  invalidatePolicyCache("payroll", companyId.toString());
   return policy;
 };
 
 // ─── Activate Policy ──────────────────────────────────────────────────────────
-exports.activatePolicy = async (id, user) => {
+exports.activatePolicy = async (id, user, query = {}) => {
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
   // Enterprise: Strict unit isolation
-  const filter = { _id: id, org_id: user.orgId, company_id: user.companyId };
-  if (user.unitId) filter.unit_id = user.unitId;
+  const filter = { _id: id, org_id: orgId, company_id: companyId };
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await PayrollPolicy.findOne(filter);
   if (!policy) throw new AppError("Payroll policy not found", 404);
@@ -207,7 +253,7 @@ exports.activatePolicy = async (id, user) => {
   if (policy.status === "archived") throw new AppError("Cannot activate an archived policy", 400);
 
   // Check scope conflict before activating
-  await _checkScopeConflict(id, policy, user.companyId);
+  await _checkScopeConflict(id, policy, companyId);
 
   await policyVersionService.saveVersionSnapshot({
     policyType: POLICY_TYPE,
@@ -224,15 +270,16 @@ exports.activatePolicy = async (id, user) => {
   policy.updatedBy   = user.userId;
 
   await policy.save();
-  invalidatePolicyCache("payroll", user.companyId.toString());
+  invalidatePolicyCache("payroll", companyId.toString());
   return policy;
 };
 
 // ─── Deactivate Policy ────────────────────────────────────────────────────────
-exports.deactivatePolicy = async (id, user) => {
+exports.deactivatePolicy = async (id, user, query = {}) => {
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
   // Enterprise: Strict unit isolation
-  const filter = { _id: id, org_id: user.orgId, company_id: user.companyId };
-  if (user.unitId) filter.unit_id = user.unitId;
+  const filter = { _id: id, org_id: orgId, company_id: companyId };
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await PayrollPolicy.findOne(filter);
   if (!policy) throw new AppError("Payroll policy not found", 404);
@@ -254,15 +301,16 @@ exports.deactivatePolicy = async (id, user) => {
   policy.updatedBy = user.userId;
 
   await policy.save();
-  invalidatePolicyCache("payroll", user.companyId.toString());
+  invalidatePolicyCache("payroll", companyId.toString());
   return policy;
 };
 
 // ─── Archive Policy ───────────────────────────────────────────────────────────
-exports.archivePolicy = async (id, user) => {
+exports.archivePolicy = async (id, user, query = {}) => {
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
   // Enterprise: Strict unit isolation
-  const filter = { _id: id, org_id: user.orgId, company_id: user.companyId };
-  if (user.unitId) filter.unit_id = user.unitId;
+  const filter = { _id: id, org_id: orgId, company_id: companyId };
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await PayrollPolicy.findOne(filter);
   if (!policy) throw new AppError("Payroll policy not found", 404);
@@ -284,15 +332,16 @@ exports.archivePolicy = async (id, user) => {
   policy.updatedBy  = user.userId;
 
   await policy.save();
-  invalidatePolicyCache("payroll", user.companyId.toString());
+  invalidatePolicyCache("payroll", companyId.toString());
   return policy;
 };
 
 // ─── Delete Policy ────────────────────────────────────────────────────────────
-exports.deletePolicy = async (id, user) => {
+exports.deletePolicy = async (id, user, query = {}) => {
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
   // Enterprise: Strict unit isolation
-  const filter = { _id: id, org_id: user.orgId, company_id: user.companyId };
-  if (user.unitId) filter.unit_id = user.unitId;
+  const filter = { _id: id, org_id: orgId, company_id: companyId };
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await PayrollPolicy.findOne(filter);
   if (!policy) throw new AppError("Payroll policy not found", 404);
@@ -422,15 +471,17 @@ const _getHardcodedDefaults = () => ({
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ─── GET VERSION HISTORY ──────────────────────────────────────────────────
-exports.getVersionHistory = async (id, user) => {
+exports.getVersionHistory = async (id, user, query = {}) => {
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
+  const scopedUser = { ...user, orgId, companyId, unitId };
   // Enterprise: Strict unit isolation
-  const filter = { _id: id, org_id: user.orgId, company_id: user.companyId };
-  if (user.unitId) filter.unit_id = user.unitId;
+  const filter = { _id: id, org_id: orgId, company_id: companyId };
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await PayrollPolicy.findOne(filter).select("_id name version");
   if (!policy) throw new AppError("Payroll policy not found", 404);
 
-  const history = await policyVersionService.getVersionHistory("PAYROLL", id, user);
+  const history = await policyVersionService.getVersionHistory("PAYROLL", id, scopedUser);
 
   return {
     policyId:       policy._id,
@@ -441,22 +492,26 @@ exports.getVersionHistory = async (id, user) => {
 };
 
 // ─── GET ONE VERSION SNAPSHOT ──────────────────────────────────────────────
-exports.getVersionSnapshot = async (id, version, user) => {
+exports.getVersionSnapshot = async (id, version, user, query = {}) => {
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
+  const scopedUser = { ...user, orgId, companyId, unitId };
   // Enterprise: Strict unit isolation
-  const filter = { _id: id, org_id: user.orgId, company_id: user.companyId };
-  if (user.unitId) filter.unit_id = user.unitId;
+  const filter = { _id: id, org_id: orgId, company_id: companyId };
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await PayrollPolicy.findOne(filter).select("_id name");
   if (!policy) throw new AppError("Payroll policy not found", 404);
 
-  return await policyVersionService.getVersionSnapshot("PAYROLL", id, version, user);
+  return await policyVersionService.getVersionSnapshot("PAYROLL", id, version, scopedUser);
 };
 
 // ─── RESTORE A PREVIOUS VERSION ────────────────────────────────────────────
-exports.restoreVersion = async (id, version, user) => {
+exports.restoreVersion = async (id, version, user, query = {}) => {
+  const { orgId, companyId, unitId } = await resolvePolicyScope(user, query);
+  const scopedUser = { ...user, orgId, companyId, unitId };
   // Enterprise: Strict unit isolation
-  const filter = { _id: id, org_id: user.orgId, company_id: user.companyId };
-  if (user.unitId) filter.unit_id = user.unitId;
+  const filter = { _id: id, org_id: orgId, company_id: companyId };
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await PayrollPolicy.findOne(filter);
   if (!policy) throw new AppError("Payroll policy not found", 404);
@@ -464,11 +519,11 @@ exports.restoreVersion = async (id, version, user) => {
     throw new AppError("Cannot restore an archived policy. Activate or unarchive first.", 400);
   }
 
-  const snapshot = await policyVersionService.prepareRestore("PAYROLL", id, version, user);
+  const snapshot = await policyVersionService.prepareRestore("PAYROLL", id, version, scopedUser);
 
   // If restoring would activate this policy and create a scope conflict, block it
   if (policy.status === "active" && snapshot.applicableFor) {
-    await _checkScopeConflict(id, { applicableFor: snapshot.applicableFor }, user.companyId);
+    await _checkScopeConflict(id, { applicableFor: snapshot.applicableFor }, companyId);
   }
 
   await policyVersionService.saveVersionSnapshot({
@@ -500,6 +555,6 @@ for (const key of allConfigFields) {
   policy.updatedBy = user.userId;
 
   await policy.save();
-  invalidatePolicyCache("payroll", user.companyId.toString());
+  invalidatePolicyCache("payroll", companyId.toString());
   return policy;
 };

@@ -57,6 +57,10 @@ exports.punchOut = Joi.object({
 
 // ─── GET /attendance (HR — all employees) ────────────────────
 exports.getAttendance = Joi.object({
+  orgId: objectId.optional(),
+  companyId: objectId.optional(),
+  unit_id: objectId.optional(),
+
   month: Joi.string()
     .pattern(/^\d{4}-(0[1-9]|1[0-2])$/)
     .optional()
@@ -102,6 +106,13 @@ exports.getAttendance = Joi.object({
 // ─── PATCH /attendance/:id/regularize (HR only) ───────────────
 // HR manually kisi record ko fix karta hai
 exports.regularize = Joi.object({
+  regularizationType: Joi.string()
+    .valid(
+      "MISSED_PUNCH_IN", "MISSED_PUNCH_OUT", "BOTH_MISSED",
+      "WRONG_TIME", "WFH_CORRECTION", "STATUS_CORRECTION"
+    )
+    .required(),
+
   status: Joi.string()
     .valid(
       "PRESENT", "ABSENT", "HALF_DAY",
@@ -133,6 +144,10 @@ exports.regularize = Joi.object({
       "any.required": "Regularization ke liye remarks required hain",
       "string.min":   "Remarks kam se kam 5 characters ke hone chahiye",
     }),
+
+  attachments: Joi.array()
+    .items(Joi.string().uri())
+    .default([]),
 });
 
 // ─── GET /attendance/summary?month=YYYY-MM ────────────────────

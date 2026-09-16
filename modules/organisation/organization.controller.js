@@ -5,7 +5,7 @@ const AppError = require("../../utils/appError");
 const Company = require("../company/models/company.model");
 const Unit = require("../unit/models/unit.model");
 const Department = require("../department/department.model");
-const User = require("../auth/models/user.model");
+const Employee = require("../employee/models/employee.model");
 const LOB = require("../lob/models/lob.model");
 
 // ─── GET /api/v1/organization/config ─────────────────────
@@ -139,14 +139,21 @@ exports.getHierarchyTree = async (req, res, next) => {
       return next(new AppError("Organization ID not found in user context", 400));
     }
 
-    const orgId = req.user.orgId;
-    const companyId = req.user.companyId;
+    const { orgId: requestedOrgId, companyId: requestedCompanyId, unit_id: requestedUnitId } = req.query;
+    const orgId = requestedOrgId || req.user.orgId;
 
-    // Import models
-    const Company = require("../company/models/company.model");
-    const Unit = require("../unit/models/unit.model");
-    const Department = require("../department/department.model");
-    const User = require("../auth/models/user.model");
+    if (String(orgId) !== String(req.user.orgId)) {
+      return next(new AppError("Organization access denied", 403));
+    }
+    if (req.user.companyId && requestedCompanyId && String(requestedCompanyId) !== String(req.user.companyId)) {
+      return next(new AppError("Company access denied", 403));
+    }
+    if (req.user.unitId && requestedUnitId && String(requestedUnitId) !== String(req.user.unitId)) {
+      return next(new AppError("Unit access denied", 403));
+    }
+
+    const companyId = req.user.companyId || requestedCompanyId;
+    const unitId = req.user.unitId || requestedUnitId;
 
     // Fetch Organization
     const org = await Organization.findById(orgId).select("name logo_url industry country");
@@ -154,140 +161,169 @@ exports.getHierarchyTree = async (req, res, next) => {
       return next(new AppError("Organization not found", 404));
     }
 
-    // Fetch Company
-    const company = await Company.findById(companyId).select("company_name logo_url company_email company_phone");
-    if (!company) {
+    const companyFilter = { org_id: orgId, is_deleted: false };
+    if (companyId) companyFilter._id = companyId;
+
+    const companies = await Company.find(companyFilter)
+      .select("company_name logo_url company_email company_phone")
+      .lean();
+
+    if (companyId && companies.length === 0) {
       return next(new AppError("Company not found", 404));
     }
 
-    // Import LOB model
-    const LOB = require("../lob/models/lob.model");
-    
-    // Fetch LOBs under this company
-    const lobs = await LOB.find({ company_id: companyId, org_id: orgId })
-      .select("name description")
-      .lean();
+    const companyNodes = [];
 
-    // Build hierarchy: Organization → Company → LOB → Unit → Department → Employees
-    const lobNodes = [];
-    
-    for (const lob of lobs) {
-      // Fetch Units under this LOB
-      const units = await Unit.find({ lob_id: lob._id, company_id: companyId, org_id: orgId })
-        .select("name description location logo_url")
+    for (const company of companies) {
+      const lobs = await LOB.find({
+        company_id: company._id,
+        org_id: orgId,
+        is_deleted: false
+      })
+        .select("name description")
         .lean();
 
-      const unitNodes = [];
-      for (const unit of units) {
-        // Fetch all departments under this unit
-        const allDepartments = await Department.find({ unit_id: unit._id, company_id: companyId })
-          .select("name color location parentId")
-          .lean();
+      const lobNodes = [];
 
-        // Build recursive department tree (ONLY departments, NO employees/designations)
-        const buildDeptTree = (parentId = null) => {
-          const nodes = [];
-          
-          for (const dept of allDepartments) {
-            const deptParentId = dept.parentId?._id?.toString() || dept.parentId?.toString() || null;
-            
-            if (deptParentId === parentId) {
-              // Recursively get sub-departments
-              const subDepts = buildDeptTree(dept._id.toString());
-              
-              nodes.push({
-                id: dept._id,
-                level: "department",
-                name: dept.name,
-                color: dept.color,
-                location: dept.location,
-                employeeCount: 0, // Placeholder - employees shown in designations only
-                children: subDepts
-              });
-            }
-          }
-          
-          return nodes;
+      for (const lob of lobs) {
+        const unitFilter = {
+          lob_id: lob._id,
+          company_id: company._id,
+          org_id: orgId,
+          is_deleted: false
         };
+        if (unitId) unitFilter._id = unitId;
 
-        const deptNodes = buildDeptTree(null);
-
-        // NOW fetch ALL employees in this unit and group by designation
-        const allDeptIds = allDepartments.map(d => d._id);
-        
-        const allEmployees = await User.find({ 
-          department_id: { $in: allDeptIds },
-          status: "active" 
-        })
-          .select("first_name last_name email phone employee_id profile_photo designation_id reports_to status department_id")
-          .populate("designation_id", "name")
-          .populate("reports_to", "first_name last_name profile_photo")
+        const units = await Unit.find(unitFilter)
+          .select("name description location logo_url")
           .lean();
 
-        // Group employees by designation
-        const employeesByDesignation = {};
-        allEmployees.forEach(emp => {
-          const designationName = emp.designation_id?.name || "Unassigned";
-          const designationId = emp.designation_id?._id?.toString() || "unassigned";
-          
-          if (!employeesByDesignation[designationId]) {
-            employeesByDesignation[designationId] = {
-              id: designationId,
-              level: "designation",
-              name: designationName,
-              employeeCount: 0,
-              children: []
-            };
+        const unitNodes = [];
+
+        for (const unit of units) {
+          const departments = await Department.find({
+            unit_id: unit._id,
+            company_id: company._id,
+            org_id: orgId,
+            isDeleted: false
+          })
+            .select("name parentId")
+            .lean();
+
+          const employees = await Employee.find({
+            unit_id: unit._id,
+            company_id: company._id,
+            org_id: orgId,
+            isDeleted: false,
+            status: { $ne: "TERMINATED" }
+          })
+            .select("name email phone employeeId profilePhoto designationId reportingManagerId status departmentId")
+            .populate("designationId", "name")
+            .populate("reportingManagerId", "name profilePhoto employeeId")
+            .lean();
+
+          const departmentIds = new Set(departments.map(department => String(department._id)));
+          const employeesByDepartment = new Map();
+
+          for (const employee of employees) {
+            const departmentId = String(employee.departmentId);
+            const departmentEmployees = employeesByDepartment.get(departmentId) || [];
+            departmentEmployees.push(employee);
+            employeesByDepartment.set(departmentId, departmentEmployees);
           }
-          
-          const dept = allDepartments.find(d => d._id.equals(emp.department_id));
-          
-          employeesByDesignation[designationId].children.push({
-            id: emp._id,
+
+          const toEmployeeNode = employee => ({
+            id: employee._id,
             level: "employee",
-            name: `${emp.first_name} ${emp.last_name}`,
-            email: emp.email,
-            phone: emp.phone,
-            employeeId: emp.employee_id,
-            profilePhoto: emp.profile_photo,
-            designation: designationName,
-            department: dept?.name || "N/A",
-            reportsTo: emp.reports_to ? {
-              id: emp.reports_to._id,
-              name: `${emp.reports_to.first_name} ${emp.reports_to.last_name}`,
-              profilePhoto: emp.reports_to.profile_photo
+            name: employee.name,
+            email: employee.email,
+            phone: employee.phone,
+            employeeId: employee.employeeId,
+            profilePhoto: employee.profilePhoto,
+            designation: employee.designationId?.name || "Unassigned",
+            departmentName: departments.find(department =>
+              String(department._id) === String(employee.departmentId)
+            )?.name || "Unassigned",
+            unitName: unit.name,
+            companyName: company.company_name,
+            reportingManager: employee.reportingManagerId ? {
+              id: employee.reportingManagerId._id,
+              name: employee.reportingManagerId.name,
+              profilePhoto: employee.reportingManagerId.profilePhoto,
+              employeeId: employee.reportingManagerId.employeeId
             } : null,
-            status: emp.status
+            status: employee.status
           });
-          employeesByDesignation[designationId].employeeCount++;
-        });
 
-        const designationNodes = Object.values(employeesByDesignation);
+          const buildDepartmentTree = parentId => departments
+            .filter(department => {
+              const departmentParentId = department.parentId ? String(department.parentId) : null;
+              return departmentParentId === parentId;
+            })
+            .map(department => {
+              const nestedDepartments = buildDepartmentTree(String(department._id));
+              const directEmployees = (employeesByDepartment.get(String(department._id)) || [])
+                .map(toEmployeeNode);
+              const nestedEmployeeCount = nestedDepartments.reduce(
+                (total, nestedDepartment) => total + nestedDepartment.employeeCount,
+                0
+              );
 
-        // Combine: Unit → [Departments..., Designations...] (FLAT, separate)
-        unitNodes.push({
-          id: unit._id,
-          level: "unit",
-          name: unit.name,
-          description: unit.description,
-          location: unit.location,
-          logo: unit.logo_url,
-          employeeCount: allEmployees.length,
-          children: [...deptNodes, ...designationNodes]
+              return {
+                id: department._id,
+                level: department.parentId ? "subDepartment" : "department",
+                name: department.name,
+                employeeCount: directEmployees.length + nestedEmployeeCount,
+                children: [...nestedDepartments, ...directEmployees]
+              };
+            });
+
+          const rootDepartmentIds = departments
+            .filter(department => !department.parentId || !departmentIds.has(String(department.parentId)))
+            .map(department => String(department._id));
+          const departmentNodes = rootDepartmentIds.flatMap(departmentId => {
+            const department = departments.find(item => String(item._id) === departmentId);
+            const parentId = department?.parentId ? String(department.parentId) : null;
+            return buildDepartmentTree(parentId).filter(node => String(node.id) === departmentId);
+          });
+          const unassignedEmployees = employees
+            .filter(employee => !departmentIds.has(String(employee.departmentId)))
+            .map(toEmployeeNode);
+
+          unitNodes.push({
+            id: unit._id,
+            level: "unit",
+            name: unit.name,
+            description: unit.description,
+            location: unit.location,
+            logo: unit.logo_url,
+            employeeCount: employees.length,
+            children: [...departmentNodes, ...unassignedEmployees]
+          });
+        }
+
+        lobNodes.push({
+          id: lob._id,
+          level: "lob",
+          name: lob.name,
+          description: lob.description,
+          employeeCount: unitNodes.reduce((total, unit) => total + unit.employeeCount, 0),
+          children: unitNodes
         });
       }
 
-      lobNodes.push({
-        id: lob._id,
-        level: "lob",
-        name: lob.name,
-        description: lob.description,
-        employeeCount: unitNodes.reduce((sum, unit) => sum + unit.employeeCount, 0),
-        children: unitNodes
+      companyNodes.push({
+        id: company._id,
+        level: "company",
+        name: company.company_name,
+        logo: company.logo_url,
+        email: company.company_email,
+        phone: company.company_phone,
+        employeeCount: lobNodes.reduce((total, lob) => total + lob.employeeCount, 0),
+        children: lobNodes
       });
     }
 
-    // Build complete tree
     const tree = {
       id: org._id,
       level: "organization",
@@ -295,18 +331,8 @@ exports.getHierarchyTree = async (req, res, next) => {
       logo: org.logo_url,
       industry: org.industry,
       country: org.country,
-      children: [
-        {
-          id: company._id,
-          level: "company",
-          name: company.company_name,
-          logo: company.logo_url,
-          email: company.company_email,
-          phone: company.company_phone,
-          employeeCount: lobNodes.reduce((sum, lob) => sum + lob.employeeCount, 0),
-          children: lobNodes
-        }
-      ]
+      employeeCount: companyNodes.reduce((total, company) => total + company.employeeCount, 0),
+      children: companyNodes
     };
 
     res.json({

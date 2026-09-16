@@ -7,8 +7,8 @@ const planService = require("./plan.service");
 // GET /plans/public
 exports.getPublicPlans = async (req, res, next) => {
   try {
-    const plans = await planService.getPublicPlans();
-    return res.status(200).json({ success: true, data: plans });
+    const result = await planService.getPublicPlans(req.user);
+    return res.status(200).json({ success: true, data: result });
   } catch (error) {
     next(error);
   }
@@ -71,6 +71,18 @@ exports.deletePlan = async (req, res, next) => {
 exports.getMyFeatures = async (req, res, next) => {
   try {
     const result = await planService.getMyFeatures(req.user);
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /plans/my-plan
+// Get current subscription with full plan details (modules, features, prices)
+// For org_admin/company_admin to view their current plan
+exports.getMyPlan = async (req, res, next) => {
+  try {
+    const result = await planService.getMyPlan(req.user);
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
     next(error);

@@ -24,50 +24,28 @@ const templateController = require("./employeeTemplate.controller")
 // Admins/HR need permission to access others
 const checkSelfOrPermission = (permission) => async (req, res, next) => {
   const Employee = require("./models/employee.model");
-  
-  console.log('🔥🔥🔥 checkSelfOrPermission MIDDLEWARE CALLED 🔥🔥🔥');
-  console.log('Permission being checked:', permission);
-  console.log('Request params:', req.params);
-  console.log('Request user:', req.user);
-  
-  try {
-    console.log('=== Self-Access Check Debug ===');
-    console.log('URL param id (req.params.id):', req.params.id);
-    console.log('Request user.userId:', req.user.userId);
 
+  try {
     // Find current user's employee record
     const emp = await Employee.findOne({
       userId: req.user.userId,
       isDeleted: false
     }).select("_id userId").lean();
 
-    console.log('Database query result (emp):', emp);
-    
     if (!emp) {
-      console.log('❌ No employee record found for user');
-      return res.status(404).json({
-        success: false,
-        message: "Employee profile not found"
-      });
+      return checkPermission(permission)(req, res, next);
     }
 
     // Compare employee IDs
     const empIdStr = emp._id.toString();
     const urlIdStr = req.params.id.toString();
-    
-    console.log('Comparing IDs:');
-    console.log('  Employee _id from DB:', empIdStr);
-    console.log('  URL param id:', urlIdStr);
-    console.log('  Match result:', empIdStr === urlIdStr);
 
     // If viewing/updating own profile → ALLOW (no permission needed)
     if (empIdStr === urlIdStr) {
-      console.log('✅ SELF-ACCESS GRANTED - Own profile');
       return next();
     }
 
     // If accessing someone else → CHECK PERMISSION (existing logic preserved)
-    console.log('❌ ACCESSING OTHER - Permission required:', permission);
     return checkPermission(permission)(req, res, next);
     
   } catch (error) {

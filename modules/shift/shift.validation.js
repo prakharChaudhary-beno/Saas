@@ -139,6 +139,10 @@ exports.updateShift = Joi.object({
 // ─── GET SHIFTS (query params) ───────────────────────────────
 // GET /shifts?status=&shiftType=&unit_id=
 exports.getShifts = Joi.object({
+  orgId: objectId.optional(),
+
+  companyId: objectId.optional(),
+
   status: Joi.string()
     .valid("ACTIVE", "INACTIVE")
     .optional(),

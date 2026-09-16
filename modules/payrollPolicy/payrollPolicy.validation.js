@@ -301,4 +301,17 @@ const updatePolicySchema = createPolicySchema.fork(
   changeNote: Joi.string().trim().max(500).optional().allow(null, ""),
 });
 
-module.exports = { createPolicySchema, updatePolicySchema };
+const getPoliciesSchema = Joi.object({
+  orgId:          objectId.optional(),
+  companyId:      objectId.optional(),
+  unit_id:        objectId.optional(),
+  status:         Joi.string().valid("draft", "active", "inactive", "archived").optional(),
+  employmentType: Joi.string().valid("FULL_TIME", "PART_TIME", "CONTRACT", "INTERN").optional(),
+  department:     objectId.optional(),
+  designation:    objectId.optional(),
+  search:         Joi.string().trim().max(150).optional().allow(""),
+  page:           Joi.number().integer().min(1).default(1),
+  limit:          Joi.number().integer().min(1).max(100).default(20),
+});
+
+module.exports = { createPolicySchema, updatePolicySchema, getPoliciesSchema };

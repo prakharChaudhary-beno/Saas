@@ -158,7 +158,7 @@ const TEMPLATES = {
   DELEGATION_RECEIVED: (data) => ({
     title: `Permission Delegated to You`,
     message: `${data.delegatorName} has delegated "${data.permissions}" permission to you from ${data.startDate} to ${data.endDate}.`,
-    actionUrl: `/delegations/received`,
+    actionUrl: `/delegation`,
     actionLabel: "View Delegation",
     priority: "MEDIUM",
     icon: "tabler:users"
@@ -167,7 +167,7 @@ const TEMPLATES = {
   DELEGATION_REVOKED: (data) => ({
     title: `Delegation Revoked`,
     message: `${data.delegatorName} has revoked the delegated permissions. Reason: ${data.reason || "Not specified"}.`,
-    actionUrl: `/delegations/received`,
+    actionUrl: `/delegation`,
     actionLabel: "View Details",
     priority: "MEDIUM",
     icon: "tabler:user-minus"

@@ -149,7 +149,7 @@ exports.createTree = async (req, res) => {
 /**
  * Get all departments as tree structure
  */
-exports.listTree = async (req, res) => {
+exports.listTree = async (req, res, next) => {
   try {
     const tree = await departmentService.getDepartmentsTree(req.user, req.query);
     
@@ -158,10 +158,7 @@ exports.listTree = async (req, res) => {
       data: tree
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    next(error);
   }
 };
 

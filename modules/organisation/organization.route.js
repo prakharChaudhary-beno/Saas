@@ -4,7 +4,7 @@ const express = require("express");
 const router = express.Router();
 const { upload } = require("../../config/cloudinary");
 const organizationController = require("./organization.controller");
-const { authenticate, authorize } = require("../../middlewares/auth.middleware");
+const { authenticate } = require("../../middlewares/auth.middleware");
 
 // ─── Organization Config Routes (Org Admin Only) ─────────────
 

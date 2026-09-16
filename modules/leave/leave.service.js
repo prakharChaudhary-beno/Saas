@@ -9,6 +9,7 @@ const LeaveRequest = require("./models/leaveRequest.models");
 const Employee     = require("../employee/models/employee.model");
 const AppError     = require("../../utils/appError");
 const mongoose     = require("mongoose");
+const { resolveLeaveTypeScope } = require("./leaveTypeScope");
 
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
@@ -21,12 +22,11 @@ const buildScopeFilter = (user) => {
   return filter;
 };
 
-// Company level filter — LeaveType ke liye
-const buildCompanyFilter = (user) => {
-  if (user.role === "SUPER_ADMIN") return {};
-  const filter = { org_id: user.orgId };
-  if (user.companyId) filter.company_id = user.companyId;
-  return filter;
+const throwDuplicateLeaveType = (error, code) => {
+  if (error?.code === 11000) {
+    throw new AppError(`Leave type with code '${code}' already exists in this company`, 409);
+  }
+  throw error;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -232,32 +232,37 @@ const calculateDynamicLeaveBalances = async (employeeId, year) => {
 };
 
 // ─── CREATE LEAVE TYPE ────────────────────────────────────
-exports.create = async (payload, user) => {
+exports.create = async (payload, user, query = {}) => {
   const { name, code } = payload;
+  const scope = await resolveLeaveTypeScope(user, query, true);
 
   const existing = await LeaveType.findOne({
-    company_id: user.companyId,
+    ...scope,
     code:       code.toUpperCase(),
     isDeleted:  false,
   });
-  if (existing) throw new AppError(`Leave type with code '${code}' already exists`, 400);
+  if (existing) throw new AppError(`Leave type with code '${code}' already exists in this company`, 409);
 
-  return await LeaveType.create({
-    ...payload,
-    code:       code.toUpperCase(),
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    isSystem:   false,
-    createdBy:  user.userId,
-  });
+  try {
+    return await LeaveType.create({
+      ...payload,
+      code:       code.toUpperCase(),
+      ...scope,
+      isSystem:   false,
+      createdBy:  user.userId,
+    });
+  } catch (error) {
+    throwDuplicateLeaveType(error, code);
+  }
 };
 
 // ─── GET ALL LEAVE TYPES ──────────────────────────────────
 exports.getAll = async (query, user) => {
   const { isActive, isPaid, search } = query;
+  const scope = await resolveLeaveTypeScope(user, query);
 
   const filter = {
-    ...buildCompanyFilter(user),
+    ...scope,
     isDeleted: false,
   };
 
@@ -265,9 +270,10 @@ exports.getAll = async (query, user) => {
   if (isPaid   !== undefined) filter.isPaid   = isPaid   === "true";
 
   if (search) {
+    const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     filter.$or = [
-      { name: { $regex: search, $options: "i" } },
-      { code: { $regex: search, $options: "i" } },
+      { name: { $regex: escapedSearch, $options: "i" } },
+      { code: { $regex: escapedSearch, $options: "i" } },
     ];
   }
 
@@ -275,10 +281,11 @@ exports.getAll = async (query, user) => {
 };
 
 // ─── GET ONE LEAVE TYPE ───────────────────────────────────
-exports.getOne = async (id, user) => {
+exports.getOne = async (id, user, query = {}) => {
+  const scope = await resolveLeaveTypeScope(user, query);
   const leaveType = await LeaveType.findOne({
     _id:       id,
-    ...buildCompanyFilter(user),
+    ...scope,
     isDeleted: false,
   });
   if (!leaveType) throw new AppError("Leave type not found", 404);
@@ -286,10 +293,11 @@ exports.getOne = async (id, user) => {
 };
 
 // ─── UPDATE LEAVE TYPE ────────────────────────────────────
-exports.update = async (id, payload, user) => {
+exports.update = async (id, payload, user, query = {}) => {
+  const scope = await resolveLeaveTypeScope(user, query, true);
   const leaveType = await LeaveType.findOne({
     _id:       id,
-    ...buildCompanyFilter(user),
+    ...scope,
     isDeleted: false,
   });
   if (!leaveType) throw new AppError("Leave type not found", 404);
@@ -298,12 +306,12 @@ exports.update = async (id, payload, user) => {
 
   if (payload.code && payload.code.toUpperCase() !== leaveType.code) {
     const existing = await LeaveType.findOne({
-      company_id: user.companyId,
+      ...scope,
       code:       payload.code.toUpperCase(),
       isDeleted:  false,
       _id:        { $ne: id },
     });
-    if (existing) throw new AppError(`Leave type with code '${payload.code}' already exists`, 400);
+    if (existing) throw new AppError(`Leave type with code '${payload.code}' already exists`, 409);
     payload.code = payload.code.toUpperCase();
   }
 
@@ -312,15 +320,20 @@ exports.update = async (id, payload, user) => {
   delete payload.company_id;
 
   Object.assign(leaveType, { ...payload, updatedBy: user.userId });
-  await leaveType.save();
+  try {
+    await leaveType.save();
+  } catch (error) {
+    throwDuplicateLeaveType(error, payload.code || leaveType.code);
+  }
   return leaveType;
 };
 
 // ─── DELETE LEAVE TYPE ────────────────────────────────────
-exports.remove = async (id, user) => {
+exports.remove = async (id, user, query = {}) => {
+  const scope = await resolveLeaveTypeScope(user, query, true);
   const leaveType = await LeaveType.findOne({
     _id:       id,
-    ...buildCompanyFilter(user),
+    ...scope,
     isDeleted: false,
   });
   if (!leaveType) throw new AppError("Leave type not found", 404);

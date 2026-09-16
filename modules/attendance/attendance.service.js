@@ -5,6 +5,8 @@ const Employee   = require("../employee/models/employee.model");
 const AppError   = require("../../utils/appError");
 const CompanyConfig = require("../companyConfig/models/companyConfig.model");
 const { resolveAttendancePolicy } = require("../../utils/policyResolver");
+const regularisationPolicyService = require("./regularisationPolicy.service");
+const { calculatePolicyOvertime } = require("./overtimeCalculator");
 const Holiday      = require("../holiday/models/holiday.models");     // T-19
 const LeaveRequest = require("../leave/models/leaveRequest.models");  // T-20
 
@@ -574,6 +576,11 @@ exports.punchOut = async (data, user) => {
 
   // ── 1. Get employee ──────────────────────────────────────────
   const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId);
+  const attendancePolicy = await resolveAttendancePolicy(
+    employee._id.toString(),
+    user.companyId.toString(),
+    user.unitId ? user.unitId.toString() : null
+  );
 
   // ── 2. Today ka record dhundo (org timezone midnight) ─────────
   const today = getTodayDateInOrgTimezone(timezone);
@@ -618,21 +625,18 @@ exports.punchOut = async (data, user) => {
   // ── 6. workingHours & overtimeHours (timezone-aware) ─────────
   // Calculate using timezone-aware utility
   const workingHours = calculateWorkingHours(record.checkIn, now, timezone);
-  const overtimeEnabled = companyConfig?.overtimeEnabled ?? true;
-  const overtimeThreshold = record.overtimeThreshold || 0;
-  
-  // Calculate overtime only if enabled
-  let overtimeHours = 0;
-  if (overtimeEnabled) {
-    overtimeHours = calculateOvertime(
-      now,
-      record.shiftEnd,
-      record.isNextDay,
-      record.date, // Shift reference date
-      timezone,
-      overtimeThreshold
-    );
-  }
+  const detectedOvertimeHours = calculateOvertime(
+    now,
+    record.shiftEnd,
+    record.isNextDay,
+    record.date,
+    timezone,
+    0
+  );
+  const overtimeHours = calculatePolicyOvertime(
+    detectedOvertimeHours,
+    attendancePolicy.overtime
+  );
   
   record.checkOut  = now;
   record.workingHours = workingHours;
@@ -862,6 +866,9 @@ exports.getMySummary = async (query, user) => {
 
 exports.getAllAttendance = async (query, user) => {
   const {
+    orgId: requestedOrgId,
+    companyId: requestedCompanyId,
+    unit_id: requestedUnitId,
     month,
     startDate,
     endDate,
@@ -872,13 +879,30 @@ exports.getAllAttendance = async (query, user) => {
     limit = 31,
   } = query;
 
+  if (user.role !== "SUPER_ADMIN" && requestedOrgId && String(requestedOrgId) !== String(user.orgId)) {
+    throw new AppError("Organization access denied", 403);
+  }
+  if (user.companyId && requestedCompanyId && String(requestedCompanyId) !== String(user.companyId)) {
+    throw new AppError("Company access denied", 403);
+  }
+  if (user.unitId && requestedUnitId && String(requestedUnitId) !== String(user.unitId)) {
+    throw new AppError("Unit access denied", 403);
+  }
+
+  const orgId = user.role === "SUPER_ADMIN" ? requestedOrgId : user.orgId;
+  const companyId = user.companyId || requestedCompanyId;
+  const unitId = user.unitId || requestedUnitId;
+
+  if (!orgId) throw new AppError("orgId is required", 400);
+  if (!companyId) throw new AppError("companyId is required", 400);
+
   const filter = {
-    org_id: user.orgId,
-    company_id: user.companyId,
+    org_id: orgId,
+    company_id: companyId,
     isDeleted: false,
   };
   
-  if (user.unitId) filter.unit_id = user.unitId;
+  if (unitId) filter.unit_id = unitId;
 
   // Date range handling
   const moment = require("moment-timezone");
@@ -906,7 +930,9 @@ exports.getAllAttendance = async (query, user) => {
     const Employee = require("../employee/models/employee.model");
     const deptEmployees = await Employee.find({
       departmentId: departmentId,
-      org_id: user.orgId,
+      org_id: orgId,
+      company_id: companyId,
+      ...(unitId && { unit_id: unitId }),
       isDeleted: false,
       status: "ACTIVE"
     }).select("_id");
@@ -1103,17 +1129,75 @@ exports.getTeamAttendance = async (query, user) => {
 // PATCH /hrms/attendance/:id/regularize
 // ─────────────────────────────────────────────────────────────────────────────
 
-exports.regularize = async (attendanceId, data, user) => {
-  const { status, checkIn, checkOut, remarks } = data;
+exports.regularize = async (attendanceId, data, user, query = {}) => {
+  const { status, checkIn, checkOut, remarks, regularizationType, attachments = [] } = data;
+
+  if (!regularizationType) {
+    throw new AppError("regularizationType is required", 400);
+  }
+
+  const { orgId: requestedOrgId, companyId: requestedCompanyId, unit_id: requestedUnitId } = query;
+  if (user.role !== "SUPER_ADMIN" && requestedOrgId && String(requestedOrgId) !== String(user.orgId)) {
+    throw new AppError("Organization access denied", 403);
+  }
+  if (user.companyId && requestedCompanyId && String(requestedCompanyId) !== String(user.companyId)) {
+    throw new AppError("Company access denied", 403);
+  }
+  if (user.unitId && requestedUnitId && String(requestedUnitId) !== String(user.unitId)) {
+    throw new AppError("Unit access denied", 403);
+  }
+
+  const orgId = user.role === "SUPER_ADMIN" ? requestedOrgId : user.orgId;
+  const companyId = user.companyId || requestedCompanyId;
+  const unitId = user.unitId || requestedUnitId;
+
+  if (!orgId) throw new AppError("orgId is required", 400);
+  if (!companyId) throw new AppError("companyId is required", 400);
 
   // ── 1. Record dhundo — same tenant mein ──────────────────────
   const record = await Attendance.findOne({
     _id:        attendanceId,
-    org_id:     user.orgId,
-    company_id: user.companyId,
+    org_id:     orgId,
+    company_id: companyId,
+    ...(unitId ? { unit_id: unitId } : {}),
   });
 
   if (!record) throw new AppError("Attendance record not found", 404);
+
+  const employee = await Employee.findOne({
+    _id: record.employeeId,
+    org_id: orgId,
+    company_id: companyId,
+    isDeleted: false,
+  }).lean();
+  if (!employee) throw new AppError("Employee record not found", 404);
+
+  const policy = await regularisationPolicyService.getEffectivePolicy(employee, user, {
+    orgId,
+    companyId,
+    unit_id: unitId,
+  });
+  const policyType = regularisationPolicyService.getPolicyTypeForRegularization(policy, regularizationType);
+  if (!policyType) {
+    throw new AppError(`Correction type '${regularizationType}' is not allowed by the active policy`, 400);
+  }
+
+  const validation = await regularisationPolicyService.validateRequestAgainstPolicy(
+    policy,
+    { type: policyType, date: record.date, attachments },
+    0
+  );
+  if (!validation.valid) throw new AppError(validation.errors.join("; "), 400);
+
+  const requiresCheckIn = ["MISSED_PUNCH_IN", "BOTH_MISSED", "WRONG_TIME"].includes(regularizationType);
+  const requiresCheckOut = ["MISSED_PUNCH_OUT", "BOTH_MISSED", "WRONG_TIME"].includes(regularizationType);
+
+  if (requiresCheckIn && !checkIn) {
+    throw new AppError("Check-in time is required for the selected correction type", 400);
+  }
+  if (requiresCheckOut && !checkOut) {
+    throw new AppError("Check-out time is required for the selected correction type", 400);
+  }
 
   // ── 2. checkOut before checkIn guard ─────────────────────────
   const newCheckIn  = checkIn  ? new Date(checkIn)  : record.checkIn;
@@ -1135,6 +1219,7 @@ exports.regularize = async (attendanceId, data, user) => {
   if (checkOut) record.checkOut = new Date(checkOut);
 
   await record.save(); // pre-save recalculates workingHours
+  await record.populate("employeeId", "name employeeId email departmentId profilePhoto");
 
   return record;
 };
@@ -1496,17 +1581,18 @@ exports.adminPunchOut = async (data, user) => {
   // ── 6. Calculate working hours ───────────────────────────────
   const workingHours = calculateWorkingHours(record.checkIn, punchDate, timezone)
   
-  let overtimeHours = 0
-  if (companyConfig?.overtimeEnabled) {
-    overtimeHours = calculateOvertime(
-      punchDate,
-      record.shiftEnd,
-      record.isNextDay,
-      record.date,
-      timezone,
-      record.overtimeThreshold || 0
-    )
-  }
+  const detectedOvertimeHours = calculateOvertime(
+    punchDate,
+    record.shiftEnd,
+    record.isNextDay,
+    record.date,
+    timezone,
+    0
+  )
+  const overtimeHours = calculatePolicyOvertime(
+    detectedOvertimeHours,
+    attendancePolicy.overtime
+  )
   
   // ── 7. Use unit location ─────────────────────────────────────
   let capturedLocation = null

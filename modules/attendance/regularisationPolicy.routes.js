@@ -17,7 +17,7 @@ const checkPermission = require("../../middlewares/permission.middleware");
 router.get(
   "/",
   authenticate,
-  checkPermission("attendancePolicy.read"),
+  checkPermission("regularisationPolicy.read"),
   controller.getPolicies
 );
 
@@ -40,7 +40,7 @@ router.get(
 router.get(
   "/:id",
   authenticate,
-  checkPermission("attendancePolicy.read"),
+  checkPermission("regularisationPolicy.read"),
   controller.getPolicyById
 );
 
@@ -52,7 +52,7 @@ router.get(
 router.post(
   "/",
   authenticate,
-  checkPermission("attendancePolicy.create"),
+  checkPermission("regularisationPolicy.create"),
   controller.createPolicy
 );
 
@@ -64,7 +64,7 @@ router.post(
 router.put(
   "/:id",
   authenticate,
-  checkPermission("attendancePolicy.update"),
+  checkPermission("regularisationPolicy.update"),
   controller.updatePolicy
 );
 
@@ -76,7 +76,7 @@ router.put(
 router.delete(
   "/:id",
   authenticate,
-  checkPermission("attendancePolicy.delete"),
+  checkPermission("regularisationPolicy.delete"),
   controller.deletePolicy
 );
 
@@ -88,7 +88,7 @@ router.delete(
 router.patch(
   "/:id/toggle",
   authenticate,
-  checkPermission("attendancePolicy.update"),
+  checkPermission("regularisationPolicy.update"),
   controller.togglePolicy
 );
 

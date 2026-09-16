@@ -3,7 +3,7 @@ const companyConfigService = require("./companyConfig.service");
 // ─── GET /hrms/company/config ─────────────────────
 exports.getConfig = async (req, res, next) => {
   try {
-    const config = await companyConfigService.getConfig(req.user);
+    const config = await companyConfigService.getConfig(req.user, req.query);
     res.json({
       success: true,
       message: "Company config fetched successfully",
@@ -17,7 +17,7 @@ exports.getConfig = async (req, res, next) => {
 // ─── POST /hrms/company/config ────────────────────
 exports.createConfig = async (req, res, next) => {
   try {
-    const config = await companyConfigService.upsertConfig(req.body, req.user);
+    const config = await companyConfigService.upsertConfig(req.body, req.user, req.query);
     res.status(201).json({
       success: true,
       message: "Company config saved successfully",
@@ -31,7 +31,7 @@ exports.createConfig = async (req, res, next) => {
 // ─── PUT /hrms/company/config ─────────────────────
 exports.updateConfig = async (req, res, next) => {
   try {
-    const config = await companyConfigService.upsertConfig(req.body, req.user);
+    const config = await companyConfigService.upsertConfig(req.body, req.user, req.query);
     res.json({
       success: true,
       message: "Company config updated successfully",

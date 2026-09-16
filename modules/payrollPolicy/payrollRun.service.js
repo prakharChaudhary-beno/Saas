@@ -6,11 +6,22 @@
 const lockService = require("./payrollLock.service");
 
 const AppError               = require("../../utils/appError");
-const { resolvePayrollPolicy } = require("../../utils/policyResolver");
+const { resolveAttendancePolicy, resolvePayrollPolicy } = require("../../utils/policyResolver");
+const {
+  assertPayrollRunDateReached,
+  calculateOvertimePay,
+  calculatePayrollEligibility,
+  assertPayslipCanBeRecalculated,
+  resolveProfessionalTaxState,
+  calculateStatutoryDeductions,
+  getFinancialYear,
+} = require("./payrollRunRules");
 const Employee               = require("../employee/models/employee.model");
 const Attendance             = require("../attendance/models/attendance.model");
 const LeaveBalance           = require("../leave/models/leaveBalance.models");
 const CompanyConfig          = require("../companyConfig/models/companyConfig.model");
+const Company                = require("../company/models/company.model");
+const Unit                   = require("../unit/models/unit.model");
 const Payslip                = require("./models/payslip.model");
 const InvestmentDeclaration  = require("./models/investmentDeclaration.model");
 const mongoose               = require("mongoose");
@@ -26,40 +37,35 @@ const parseMonth = (monthStr) => {
   return { year, month, start, end };
 };
 
-// ─── Calendar days in month ───────────────────────────────────
-const daysInMonth = (year, month) => new Date(year, month, 0).getDate();
-
-// ─── Working days in month (Mon-Fri) ─────────────────────────
-// Optional: fromDate parameter to count working days from a specific date onwards
-const workingDaysInMonth = (year, month, workDays = ["MON","TUE","WED","THU","FRI"], fromDate = null) => {
-  const dayMap = { 0: "SUN", 1: "MON", 2: "TUE", 3: "WED", 4: "THU", 5: "FRI", 6: "SAT" };
-  const total  = daysInMonth(year, month);
-  let count = 0;
-  
-  // Determine start day of counting
-  let startDay = 1;
-  if (fromDate) {
-    const fromObj = new Date(fromDate);
-    if (fromObj.getFullYear() === year && fromObj.getMonth() + 1 === month) {
-      startDay = fromObj.getDate();
-    }
-  }
-  
-  for (let d = startDay; d <= total; d++) {
-    const dayName = dayMap[new Date(year, month - 1, d).getDay()];
-    if (workDays.includes(dayName)) count++;
-  }
-  return count;
-};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // CALCULATE PAYROLL FOR ONE EMPLOYEE
 // ─────────────────────────────────────────────────────────────────────────────
 
-const calculateForEmployee = async (employee, company_id, unit_id, year, month, policy, config) => {
+const calculateForEmployee = async (
+  employee,
+  company_id,
+  unit_id,
+  year,
+  month,
+  policy,
+  config,
+  statutoryLocation = {}
+) => {
   const { start, end } = parseMonth(`${year}-${String(month).padStart(2, "0")}`);
+  const attendancePolicy = await resolveAttendancePolicy(
+    employee._id.toString(),
+    company_id.toString(),
+    unit_id?.toString() || null
+  );
 
-  const totalWorkingDays = workingDaysInMonth(year, month, config?.workWeek);
+  const eligibility = calculatePayrollEligibility({
+    year,
+    month,
+    joiningDate: employee.joiningDate,
+    exitDate: employee.exitDate,
+    workDays: config?.workWeek,
+  });
+  const { totalWorkingDays, eligibleWorkingDays, proRataFactor } = eligibility;
 
   // ── Attendance summary ──────────────────────────────────────
   const attendanceSummary = await Attendance.aggregate([
@@ -67,7 +73,7 @@ const calculateForEmployee = async (employee, company_id, unit_id, year, month, 
       $match: {
         employeeId: employee._id,
         company_id: new mongoose.Types.ObjectId(String(company_id)),
-        date:       { $gte: start, $lte: end },
+        date:       { $gte: eligibility.eligibilityStart, $lte: eligibility.eligibilityEnd },
       },
     },
     {
@@ -75,7 +81,15 @@ const calculateForEmployee = async (employee, company_id, unit_id, year, month, 
         _id:           null,
         present:       { $sum: { $cond: [{ $in: ["$status", ["PRESENT", "WFH", "LATE"]] }, 1, 0] } },
         halfDay:       { $sum: { $cond: [{ $eq: ["$status", "HALF_DAY"] }, 0.5, 0] } },
-        onLeave:       { $sum: { $cond: [{ $eq: ["$status", "ON_LEAVE"] }, 1, 0] } },
+        onLeave:       {
+          $sum: {
+            $cond: [
+              { $and: [{ $eq: ["$status", "ON_LEAVE"] }, { $ne: ["$isLWP", true] }] },
+              1,
+              0,
+            ],
+          },
+        },
         holiday:       { $sum: { $cond: [{ $eq: ["$status", "HOLIDAY"] }, 1, 0] } },
         overtimeHours: { $sum: { $ifNull: ["$overtimeHours", 0] } },
       },
@@ -84,10 +98,11 @@ const calculateForEmployee = async (employee, company_id, unit_id, year, month, 
 
   const att          = attendanceSummary[0] || { present: 0, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
   const daysPresent  = att.present + att.halfDay + att.onLeave + att.holiday;
-  const lopDays      = Math.max(0, totalWorkingDays - daysPresent);
+  const lopDays      = Math.max(0, eligibleWorkingDays - daysPresent);
 
   console.log(`[PAYROLL] ${employee.name} ATTENDANCE:`, {
     totalWorkingDays,
+    eligibleWorkingDays,
     daysPresent,
     lopDays,
     present: att.present,
@@ -95,30 +110,6 @@ const calculateForEmployee = async (employee, company_id, unit_id, year, month, 
     onLeave: att.onLeave,
     holiday: att.holiday
   });
-
-  // ── Pro-rata (mid-month joiners/exiters) ─────────────────────
-  let proRataFactor = 1;
-  let proRataReason = '';
-  let eligibleWorkingDays = totalWorkingDays;
-  
-  if (employee.joiningDate) {
-    const joinDate = new Date(employee.joiningDate);
-    if (joinDate > start && joinDate <= end) {
-      // Joined mid-month - calculate eligible working days from joining date
-      const workingDaysFromJoin = workingDaysInMonth(year, month, config?.workWeek, joinDate);
-      proRataFactor = workingDaysFromJoin / totalWorkingDays;
-      proRataReason = `Mid-month joiner: ${joinDate.toISOString().split('T')[0]}`;
-      eligibleWorkingDays = workingDaysFromJoin;
-      console.log(`[PAYROLL] ${employee.name} PRO-RATA:`, {
-        joinDate: joinDate.toISOString().split('T')[0],
-        workingDaysFromJoin,
-        totalWorkingDays,
-        proRataFactor: proRataFactor.toFixed(4),
-        daysPresent,
-        lopDays
-      });
-    }
-  }
 
   const salary = employee.salary;
   const basic  = (salary?.basic || 0) * proRataFactor;
@@ -159,7 +150,7 @@ const calculateForEmployee = async (employee, company_id, unit_id, year, month, 
   }
   
   // Calculate per-day rate
-  const dailySalary = grossEarnings / lopDivisorDays;
+  const dailySalary = lopDivisorDays > 0 ? grossEarnings / lopDivisorDays : 0;
   
   console.log(`[PAYROLL] ${employee.name} LOP CALC:`, {
     grossEarnings: grossEarnings.toFixed(2),
@@ -192,49 +183,55 @@ const calculateForEmployee = async (employee, company_id, unit_id, year, month, 
   }
 
   // ── Overtime pay ─────────────────────────────────────────────
-  const overtimeMultiplier = policy?.overtimePay?.rateMultiplier || 1.5;
-  const hourlyBasic = basic / 26 / 8; // 26 working days, 8 hours/day
-  const overtimeRate = hourlyBasic; // Base hourly rate before multiplier
-  const overtimePay = policy?.overtimePay?.enabled
-    ? parseFloat(((att.overtimeHours || 0) * overtimeMultiplier * hourlyBasic).toFixed(2))
-    : 0;
+  const overtimeWorkingDays = policy?.salaryCycle?.workingDaysCalc === "fixed"
+    ? policy.salaryCycle.fixedWorkingDays
+    : totalWorkingDays;
+  const overtimeResult = calculateOvertimePay({
+    detectedHours: att.overtimeHours || 0,
+    attendanceOvertime: attendancePolicy.overtime,
+    payrollOvertime: policy?.overtimePay,
+    salary: {
+      basic,
+      hra,
+      travelAllowance: travel,
+      medicalAllowance: medical,
+      specialAllowance: special,
+      customComponents: (salary?.customComponents || []).map(component => ({
+        ...component,
+        amount: component.amount * proRataFactor,
+      })),
+    },
+    workingDays: overtimeWorkingDays,
+    standardHours: config?.standardHoursPerDay || 8,
+  });
+  const overtimeMultiplier = overtimeResult.multiplier;
+  const overtimeRate = overtimeResult.rate;
+  const overtimePay = overtimeResult.amount;
+  att.overtimeHours = overtimeResult.hours;
 
   // ── Gross salary ─────────────────────────────────────────────
   const grossBeforeLOP = parseFloat((basic + hra + travel + medical + special + overtimePay).toFixed(2));
   const grossSalary    = parseFloat((grossBeforeLOP - lopDeduction).toFixed(2));
 
-  // ── PF calculation ───────────────────────────────────────────
-  // Employee: 12% of Basic | Employer: 12% of Basic
-const taxC        = policy?.taxCompliance || {};
-const pfConfig    = {
-  enabled:      taxC.pfEnabled !== false,
-  employeeRate: taxC.pfEmployeeRate ?? 12,
-  employerRate: taxC.pfEmployerRate ?? 12,
-  ceiling:      taxC.pfCeilingAmount ?? 15000,
-};  let pfEmployee    = 0;
-  let pfEmployer    = 0;
-  if (pfConfig?.enabled !== false) {
-    const pfRate    = (pfConfig?.employeeRate  ?? 12) / 100;
-    const empRate   = (pfConfig?.employerRate  ?? 12) / 100;
-    const pfCeiling = pfConfig?.ceiling ?? null;
-    const pfBase    = pfCeiling ? Math.min(basic, pfCeiling) : basic;
-    pfEmployee      = parseFloat((pfBase * pfRate).toFixed(2));
-    pfEmployer      = parseFloat((pfBase * empRate).toFixed(2));
-  }
-
-  // ── ESI calculation ──────────────────────────────────────────
-  // Applicable only if gross < 21,000
-  const esiConfig    = policy?.taxCompliance?.esi;
-  let esiEmployee    = 0;
-if ((esiConfig?.enabled !== false) && grossBeforeLOP < 21000) {
-    const esiRate  = (esiConfig?.employeeRate ?? 0.75) / 100;
-   esiEmployee = parseFloat((grossBeforeLOP * esiRate).toFixed(2));
-  }
-
-  // ── Professional Tax (State-wise) ─────────────────────────────────────────
-  const { calculatePT } = require("../../config/ptSlabs");
-  const ptState = policy?.taxCompliance?.ptState || employee?.location?.stateCode || employee?.currentAddress?.stateCode || 'KA';
-  const professionalTax = calculatePT(ptState, grossSalary);
+  // ── Statutory deductions ─────────────────────────────────────
+  const ptState = resolveProfessionalTaxState({
+    policyState: policy?.taxCompliance?.ptState,
+    unitState: statutoryLocation.unitState,
+    companyState: statutoryLocation.companyState,
+    employeeState: employee?.location?.stateCode || employee?.currentAddress?.stateCode,
+  });
+  const {
+    pfEmployee,
+    pfEmployer,
+    esiEmployee,
+    esiEmployer,
+    professionalTax,
+  } = calculateStatutoryDeductions({
+    basic,
+    grossSalary,
+    taxCompliance: policy?.taxCompliance,
+    ptState,
+  });
 
   // ── TDS Calculation (Old/New Regime) ──────────────────────────────────────
   const { calculateTDSOldRegime, calculateTDSNewRegime, STANDARD_DEDUCTION } = require("../../config/tdsSlabs");
@@ -246,7 +243,7 @@ if ((esiConfig?.enabled !== false) && grossBeforeLOP < 21000) {
   if (policy?.tdsConfig?.enabled !== false) {
     try {
       // Get investment declaration for tax exemption
-      const financialYear = year >= 4 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
+      const financialYear = getFinancialYear(year, month);
       const declaration = await InvestmentDeclaration.findOne({
         employee_id: employee._id,
         financialYear,
@@ -373,6 +370,7 @@ if ((esiConfig?.enabled !== false) && grossBeforeLOP < 21000) {
     grossAfterLOP:      parseFloat(grossSalary.toFixed(2)),     //
     netSalary:         Math.max(0, netSalary),
     totalWorkingDays,
+    eligibleWorkingDays,
     daysPresent:       parseFloat(daysPresent.toFixed(1)),
     lopDays:           parseFloat(lopDays.toFixed(2)),
     overtimeHours:     parseFloat((att.overtimeHours || 0).toFixed(2)),
@@ -389,7 +387,7 @@ if ((esiConfig?.enabled !== false) && grossBeforeLOP < 21000) {
     // Employer contributions
     employerContributions: {
       pf:    pfEmployer,
-      esi:   parseFloat((grossBeforeLOP * ((policy?.taxCompliance?.esi?.employerRate ?? 3.25) / 100)).toFixed(2)),
+      esi:   esiEmployer,
       gratuity: policy?.taxCompliance?.gratuityEnabled ? parseFloat((basic * ((policy?.taxCompliance?.gratuityRate ?? 4.81) / 100)).toFixed(2)) : 0
     },
     
@@ -417,32 +415,32 @@ if ((esiConfig?.enabled !== false) && grossBeforeLOP < 21000) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.runForEmployee = async (employeeId, company_id, unit_id, month, user) => {
-  const { year, month: mon } = parseMonth(month);
+  const { year, month: mon, start, end } = parseMonth(month);
 
-  // ── Payroll Period Lock check ────────────────────────────────
-  if (user) {
-    const isLocked = await lockService.isPeriodLocked(mon, year, user.orgId, user.unitId);
-    if (isLocked) {
-      throw new AppError(
-        `Payroll for this period is locked. Please unlock it first before re-running.`,
-        423  // 423 Locked
-      );
-    }
-  }
-
-  const employee = await Employee.findOne({
+  const employeeFilter = {
     _id:        employeeId,
+    org_id:     user.orgId,
     company_id,
     isDeleted:  false,
-    status:     { $ne: "TERMINATED" },
-  });
+    $and: [
+      { $or: [{ joiningDate: { $exists: false } }, { joiningDate: null }, { joiningDate: { $lte: end } }] },
+      { $or: [{ exitDate: { $exists: false } }, { exitDate: null }, { exitDate: { $gte: start } }] },
+      { $or: [{ status: { $ne: "TERMINATED" } }, { exitDate: { $gte: start, $lte: end } }] },
+    ],
+  };
+  if (unit_id) employeeFilter.unit_id = unit_id;
+
+  const employee = await Employee.findOne(employeeFilter);
   if (!employee) throw new AppError("Employee not found", 404);
 
-  // Check duplicate
-  const existing = await Payslip.findOne({ employee_id: employee._id, year, month: mon });
-  if (existing && existing.status !== "DRAFT") {
-    throw new AppError("Payslip already generated for this month", 409);
-  }
+  const existing = await Payslip.findOne({
+    org_id: user.orgId,
+    company_id,
+    employee_id: employee._id,
+    year,
+    month: mon,
+  }).select("status").lean();
+  assertPayslipCanBeRecalculated(existing?.status);
 
   // ── MANDATORY: Payroll policy must exist ───────────────────
   let policy;
@@ -460,9 +458,25 @@ exports.runForEmployee = async (employeeId, company_id, unit_id, month, user) =>
       400
     );
   }
-  const config  = await CompanyConfig.findOne({ company_id }).lean();
+  assertPayrollRunDateReached(year, mon, policy.salaryCycle?.payrollRunDate);
 
-  const calc = await calculateForEmployee(employee, company_id, unit_id, year, mon, policy, config);
+  const isLocked = await lockService.isPeriodLocked(mon, year, user.orgId, unit_id, company_id);
+  if (!isLocked) {
+    throw new AppError("Payroll period must be locked before payroll can be run", 423);
+  }
+  const effectiveUnitId = employee.unit_id || unit_id;
+  const [config, company, unit] = await Promise.all([
+    CompanyConfig.findOne({ company_id }).lean(),
+    Company.findOne({ _id: company_id, org_id: user.orgId }).select("pt_state").lean(),
+    effectiveUnitId
+      ? Unit.findOne({ _id: effectiveUnitId, company_id }).select("geolocation.address.stateCode").lean()
+      : null,
+  ]);
+
+  const calc = await calculateForEmployee(employee, company_id, effectiveUnitId, year, mon, policy, config, {
+    companyState: company?.pt_state,
+    unitState: unit?.geolocation?.address?.stateCode,
+  });
 
   const payslip = await Payslip.findOneAndUpdate(
     { employee_id: employee._id, year, month: mon },
@@ -487,23 +501,37 @@ exports.runForEmployee = async (employeeId, company_id, unit_id, month, user) =>
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
-  const { year, month: mon } = parseMonth(month);
+  const { year, month: mon, start, end } = parseMonth(month);
 
-  // ── Payroll Period Lock check ─────────────────────────────
-  if (user) {
-    const isLocked = await lockService.isPeriodLocked(mon, year, user.orgId, user.unitId);
-    if (isLocked) throw new AppError("Payroll for this period is locked. Please unlock first.", 423);
-  }
+  const isLocked = await lockService.isPeriodLocked(mon, year, user.orgId, unit_id, company_id);
+  if (!isLocked) throw new AppError("Payroll period must be locked before payroll can be run", 423);
 
   const filter = {
+    org_id: user.orgId,
     company_id,
     isDeleted: false,
-    status:    { $nin: ["TERMINATED"] },
+    $and: [
+      { $or: [{ joiningDate: { $exists: false } }, { joiningDate: null }, { joiningDate: { $lte: end } }] },
+      { $or: [{ exitDate: { $exists: false } }, { exitDate: null }, { exitDate: { $gte: start } }] },
+      { $or: [{ status: { $ne: "TERMINATED" } }, { exitDate: { $gte: start, $lte: end } }] },
+    ],
   };
   if (unit_id) filter.unit_id = unit_id;
 
   const employees = await Employee.find(filter).lean();
   console.log(`[PAYROLL] Found ${employees.length} employees for unit ${unit_id}`);
+
+  const protectedPayslips = await Payslip.find({
+    org_id: user.orgId,
+    company_id,
+    employee_id: { $in: employees.map(employee => employee._id) },
+    year,
+    month: mon,
+    status: { $in: ["PUBLISHED", "PAID"] },
+  }).select("employee_id status").lean();
+  const protectedStatusByEmployee = new Map(
+    protectedPayslips.map(payslip => [payslip.employee_id.toString(), payslip.status])
+  );
   
   // Log all employees being processed
   const fs = require('fs');
@@ -516,7 +544,15 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
   
   if (!employees.length) throw new AppError("No active employees found", 404);
 
-  const config = await CompanyConfig.findOne({ company_id }).lean();
+  const employeeUnitIds = [...new Set(employees.map(employee => employee.unit_id?.toString()).filter(Boolean))];
+  const [config, company, units] = await Promise.all([
+    CompanyConfig.findOne({ company_id }).lean(),
+    Company.findOne({ _id: company_id, org_id: user.orgId }).select("pt_state").lean(),
+    Unit.find({ _id: { $in: employeeUnitIds }, company_id }).select("geolocation.address.stateCode").lean(),
+  ]);
+  const unitStateById = new Map(
+    units.map(unit => [unit._id.toString(), unit.geolocation?.address?.stateCode])
+  );
 
   const results = { processed: 0, failed: 0, errors: [] };
 
@@ -524,6 +560,7 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
     try {
       console.log(`[PAYROLL] === Processing: ${employee.name} ===`);
       fs.appendFileSync(logFile, `\nProcessing: ${employee.name}\n`);
+      assertPayslipCanBeRecalculated(protectedStatusByEmployee.get(employee._id.toString()));
       
       // ── MANDATORY: Payroll policy must exist ─────────────────
       let policy;
@@ -552,6 +589,7 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
         });
         continue;
       }
+      assertPayrollRunDateReached(year, mon, policy.salaryCycle?.payrollRunDate);
       fs.appendFileSync(logFile, `  ✓ Policy found: ${policy.name}\n`);
 
       // ── CALCULATE PAYSLIP ─────────────────────────────────────────
@@ -562,7 +600,11 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
         calc = await calculateForEmployee(
           employee, company_id,
           employee.unit_id || unit_id,
-          year, mon, policy, config
+          year, mon, policy, config,
+          {
+            companyState: company?.pt_state,
+            unitState: unitStateById.get((employee.unit_id || unit_id)?.toString()),
+          }
         );
         console.log(`[PAYROLL] ✓ Calculation complete for ${employee.name}: Net Salary = ${calc.netSalary}`);
       } catch (calcErr) {

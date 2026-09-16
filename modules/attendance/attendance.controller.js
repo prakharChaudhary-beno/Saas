@@ -220,7 +220,8 @@ exports.regularize = async (req, res, next) => {
     const record = await attendanceService.regularize(
       req.params.id,
       req.body,
-      req.user
+      req.user,
+      req.query
     );
 
     return res.status(200).json({

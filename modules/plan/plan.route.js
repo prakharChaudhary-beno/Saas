@@ -6,15 +6,20 @@ const controller = require("./plan.controller");
 const { authenticate }   = require("../../middlewares/auth.middleware");
 const { authorizeRoles } = require("../../middlewares/role.middleware");
 
-// ── Public routes — no auth needed ────────────────────────────
+// ── Public routes — auth optional (for current plan info) ────────────────────
 // Used on pricing page and during registration
-router.get("/public",     controller.getPublicPlans);
+// If authenticated, includes current subscription info
+router.get("/public",     authenticate, controller.getPublicPlans);
 router.get("/:id/public", controller.getPlanById);
 
 // ── Authenticated — current user ka plan features ─────────────
 // MUST be before /:id to avoid Express route conflict
 // Frontend app load pe yahi call kare — feature gates cache karo
 router.get("/my-features", authenticate, controller.getMyFeatures);
+
+// ── Get current subscription plan details for org/company admins ─────
+// Shows full plan info including modules and features
+router.get("/my-plan", authenticate, controller.getMyPlan);
 
 // ── Super Admin only ──────────────────────────────────────────
 router.get(   "/",    authenticate, authorizeRoles("SUPER_ADMIN"), controller.getAllPlans);

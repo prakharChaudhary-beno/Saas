@@ -7,10 +7,26 @@ const Organization = require("../organisation/models/organization.model");
 const Company = require("../company/models/company.model");
 const Unit = require("../unit/models/unit.model");
 const Employee = require("../employee/models/employee.model");
+const AppError = require("../../utils/appError");
 
 const toObjId = (id) => {
   try { return new mongoose.Types.ObjectId(String(id)); }
   catch { return null; }
+};
+
+const applyHierarchyFilter = (filter, field, requestedId) => {
+  if (!requestedId) return;
+
+  const objectId = toObjId(requestedId);
+  if (!objectId) {
+    throw new AppError(`Invalid ${field}`, 400);
+  }
+
+  if (filter[field] && String(filter[field]) !== String(objectId)) {
+    throw new AppError(`Requested ${field} is outside your permitted scope`, 403);
+  }
+
+  filter[field] = objectId;
 };
 
 // ─── Helper: Enrich logs with employee data for profile photos ───────────────
@@ -125,6 +141,9 @@ exports.getLogs = async (query, user) => {
     from,
     to,
     employeeId,
+    org_id,
+    company_id,
+    unit_id,
   } = query;
 
   const filter = {};
@@ -188,6 +207,11 @@ exports.getLogs = async (query, user) => {
     filter.org_id = toObjId(user.orgId);
     console.log('[AuditLog] default - filtering by org_id:', user.orgId);
   }
+
+  // Hierarchy selections may only narrow the role-enforced scope above.
+  applyHierarchyFilter(filter, "org_id", org_id);
+  applyHierarchyFilter(filter, "company_id", company_id);
+  applyHierarchyFilter(filter, "unit_id", unit_id);
 
   // ── Additional filters ────────────────────────────────────
   if (module)     filter.module         = module;

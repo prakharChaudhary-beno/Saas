@@ -22,12 +22,36 @@ const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
 // ─── Helper: build scope filter ──────────────────────────────
 // Har query mein yeh filter mandatory — cross-unit data leak nahi hoga
-const buildScope = (user, unitOverride = null) => ({
-  org_id:     toObjId(user.orgId),
-  company_id: toObjId(user.companyId),
-  unit_id:    toObjId(unitOverride || user.unitId),
-  is_deleted: false,
-});
+const buildScope = (user, query = {}) => {
+  const requestedOrgId = query.orgId;
+  const requestedCompanyId = query.companyId;
+  const requestedUnitId = query.unit_id;
+
+  if (user.role !== "SUPER_ADMIN" && requestedOrgId && String(requestedOrgId) !== String(user.orgId)) {
+    throw new AppError("Organization access denied", 403);
+  }
+  if (user.companyId && requestedCompanyId && String(requestedCompanyId) !== String(user.companyId)) {
+    throw new AppError("Company access denied", 403);
+  }
+  if (user.unitId && requestedUnitId && String(requestedUnitId) !== String(user.unitId)) {
+    throw new AppError("Unit access denied", 403);
+  }
+
+  const orgId = user.role === "SUPER_ADMIN" ? requestedOrgId : user.orgId;
+  const companyId = user.companyId || requestedCompanyId;
+  const unitId = user.unitId || requestedUnitId;
+
+  if (!orgId) throw new AppError("orgId is required", 400);
+  if (!companyId) throw new AppError("companyId is required", 400);
+  if (!unitId) throw new AppError("unit_id is required", 400);
+
+  return {
+    org_id:     toObjId(orgId),
+    company_id: toObjId(companyId),
+    unit_id:    toObjId(unitId),
+    is_deleted: false,
+  };
+};
 
 // ─── Helper: validate HH:MM format ───────────────────────────
 const isValidTime = (t) => /^\d{2}:\d{2}$/.test(t);
@@ -139,10 +163,7 @@ exports.getAllShifts = async (query, user) => {
     search,
   } = query;
 
-  const targetUnitId = unit_id || user.unitId;
-  if (!targetUnitId) throw new AppError("unit_id is required", 400);
-
-  const filter = buildScope(user, targetUnitId);
+  const filter = buildScope(user, query);
 
   if (status)    filter.status    = status;
   if (shiftType) filter.shiftType = shiftType;

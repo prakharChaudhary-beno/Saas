@@ -4,13 +4,61 @@
 "use strict";
 
 const RegularisationPolicy = require("./models/regularisationPolicy.model");
+const User = require("../auth/models/user.model");
 const AppError = require("../../utils/appError");
 const mongoose = require("mongoose");
 
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
+const REGULARIZATION_TYPE_POLICY_TYPES = {
+  MISSED_PUNCH_IN: ["missed_punch"],
+  MISSED_PUNCH_OUT: ["missed_punch", "early_exit"],
+  BOTH_MISSED: ["missed_punch"],
+  WRONG_TIME: ["late", "early_exit"],
+  WFH_CORRECTION: ["absent"],
+  STATUS_CORRECTION: ["absent"],
+};
+
+exports.getAllowedRegularizationTypes = (policy) => {
+  if (!policy) return [];
+
+  return Object.entries(REGULARIZATION_TYPE_POLICY_TYPES)
+    .filter(([, policyTypes]) => policyTypes.some((type) => policy.allowedFor.includes(type)))
+    .map(([regularizationType]) => regularizationType);
+};
+
+exports.getPolicyTypeForRegularization = (policy, regularizationType) => {
+  if (!policy) return null;
+
+  const policyTypes = REGULARIZATION_TYPE_POLICY_TYPES[regularizationType] || [];
+  return policyTypes.find((type) => policy.allowedFor.includes(type)) || null;
+};
+
+const resolvePolicyScope = (user, query = {}) => {
+  if (query.orgId && user.orgId && String(query.orgId) !== String(user.orgId)) {
+    throw new AppError("Organization access denied", 403);
+  }
+  if (query.companyId && user.companyId && String(query.companyId) !== String(user.companyId)) {
+    throw new AppError("Company access denied", 403);
+  }
+  if (query.unit_id && user.unitId && String(query.unit_id) !== String(user.unitId)) {
+    throw new AppError("Unit access denied", 403);
+  }
+
+  const orgId = user.orgId || query.orgId;
+  const companyId = user.companyId || query.companyId;
+  const unitId = user.unitId || query.unit_id || null;
+
+  if (!orgId || !companyId) {
+    throw new AppError("Organization and company scope are required", 400);
+  }
+
+  return { orgId: toObjId(orgId), companyId: toObjId(companyId), unitId: unitId ? toObjId(unitId) : null };
+};
+
 // ─── CREATE POLICY ──────────────────────────────────────────────
-exports.createPolicy = async (payload, user) => {
+exports.createPolicy = async (payload, user, query = {}) => {
+  const { orgId, companyId, unitId } = resolvePolicyScope(user, query);
   const {
     name,
     description,
@@ -36,8 +84,8 @@ exports.createPolicy = async (payload, user) => {
 
   // Check for duplicate name in same company
   const existing = await RegularisationPolicy.findOne({
-    org_id: toObjId(user.orgId),
-    company_id: toObjId(user.companyId),
+    org_id: orgId,
+    company_id: companyId,
     name: { $regex: new RegExp(`^${name}$`, "i") },
     isDeleted: false,
   });
@@ -47,9 +95,9 @@ exports.createPolicy = async (payload, user) => {
   }
 
   const policy = await RegularisationPolicy.create({
-    org_id: toObjId(user.orgId),
-    company_id: toObjId(user.companyId),
-    unit_id: unit_id ? toObjId(unit_id) : null,
+    org_id: orgId,
+    company_id: companyId,
+    unit_id: unitId || (unit_id ? toObjId(unit_id) : null),
     name,
     description: description || "",
     enabled: enabled !== undefined ? enabled : true,
@@ -94,11 +142,12 @@ exports.createPolicy = async (payload, user) => {
 
 // ─── GET ALL POLICIES ────────────────────────────────────────────
 exports.getPolicies = async (query, user) => {
+  const { orgId, companyId, unitId } = resolvePolicyScope(user, query);
   const { page = 1, limit = 20, status, enabled, unit_id } = query;
 
   const filter = {
-    org_id: toObjId(user.orgId),
-    company_id: toObjId(user.companyId),
+    org_id: orgId,
+    company_id: companyId,
     isDeleted: false,
   };
 
@@ -107,10 +156,10 @@ exports.getPolicies = async (query, user) => {
   
   // Enterprise Unit Isolation: Unit admins see only their unit's policies
   // Only allow unit_id override if user has NO unitId (org/company admins)
-  if (unit_id && !user.unitId) {
+  if (unitId) {
+    filter.unit_id = unitId;
+  } else if (unit_id) {
     filter.unit_id = toObjId(unit_id);
-  } else if (user.unitId) {
-    filter.unit_id = toObjId(user.unitId);
   }
 
   const skip = (Number(page) - 1) * Number(limit);
@@ -137,16 +186,17 @@ exports.getPolicies = async (query, user) => {
 };
 
 // ─── GET POLICY BY ID ────────────────────────────────────────────
-exports.getPolicyById = async (policyId, user) => {
+exports.getPolicyById = async (policyId, user, query = {}) => {
+  const { orgId, companyId, unitId } = resolvePolicyScope(user, query);
   // Enterprise Unit Isolation: Add unit_id filter
   const filter = {
     _id: toObjId(policyId),
-    org_id: toObjId(user.orgId),
-    company_id: toObjId(user.companyId),
+    org_id: orgId,
+    company_id: companyId,
     isDeleted: false,
   };
   
-  if (user.unitId) filter.unit_id = toObjId(user.unitId);
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await RegularisationPolicy.findOne(filter)
     .populate("unit_id", "name")
@@ -165,16 +215,17 @@ exports.getPolicyById = async (policyId, user) => {
 };
 
 // ─── UPDATE POLICY ──────────────────────────────────────────────
-exports.updatePolicy = async (policyId, payload, user) => {
+exports.updatePolicy = async (policyId, payload, user, query = {}) => {
+  const { orgId, companyId, unitId } = resolvePolicyScope(user, query);
   // Enterprise Unit Isolation: Add unit_id filter
   const filter = {
     _id: toObjId(policyId),
-    org_id: toObjId(user.orgId),
-    company_id: toObjId(user.companyId),
+    org_id: orgId,
+    company_id: companyId,
     isDeleted: false,
   };
   
-  if (user.unitId) filter.unit_id = toObjId(user.unitId);
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await RegularisationPolicy.findOne(filter);
 
@@ -185,8 +236,8 @@ exports.updatePolicy = async (policyId, payload, user) => {
   // Check for duplicate name if name is being changed
   if (payload.name && payload.name !== policy.name) {
     const existing = await RegularisationPolicy.findOne({
-      org_id: toObjId(user.orgId),
-      company_id: toObjId(user.companyId),
+      org_id: orgId,
+      company_id: companyId,
       name: { $regex: new RegExp(`^${payload.name}$`, "i") },
       _id: { $ne: policy._id },
       isDeleted: false,
@@ -255,16 +306,17 @@ exports.updatePolicy = async (policyId, payload, user) => {
 };
 
 // ─── DELETE POLICY ──────────────────────────────────────────────
-exports.deletePolicy = async (policyId, user) => {
+exports.deletePolicy = async (policyId, user, query = {}) => {
+  const { orgId, companyId, unitId } = resolvePolicyScope(user, query);
   // Enterprise Unit Isolation: Add unit_id filter
   const filter = {
     _id: toObjId(policyId),
-    org_id: toObjId(user.orgId),
-    company_id: toObjId(user.companyId),
+    org_id: orgId,
+    company_id: companyId,
     isDeleted: false,
   };
   
-  if (user.unitId) filter.unit_id = toObjId(user.unitId);
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await RegularisationPolicy.findOne(filter);
 
@@ -282,16 +334,17 @@ exports.deletePolicy = async (policyId, user) => {
 };
 
 // ─── TOGGLE POLICY STATUS ────────────────────────────────────────
-exports.togglePolicy = async (policyId, user) => {
+exports.togglePolicy = async (policyId, user, query = {}) => {
+  const { orgId, companyId, unitId } = resolvePolicyScope(user, query);
   // Enterprise Unit Isolation: Add unit_id filter
   const filter = {
     _id: toObjId(policyId),
-    org_id: toObjId(user.orgId),
-    company_id: toObjId(user.companyId),
+    org_id: orgId,
+    company_id: companyId,
     isDeleted: false,
   };
   
-  if (user.unitId) filter.unit_id = toObjId(user.unitId);
+  if (unitId) filter.unit_id = unitId;
   
   const policy = await RegularisationPolicy.findOne(filter);
 
@@ -332,29 +385,53 @@ exports.togglePolicy = async (policyId, user) => {
 };
 
 // ─── GET EFFECTIVE POLICY FOR EMPLOYEE ────────────────────────────
-exports.getEffectivePolicy = async (employee, user) => {
-  // Priority: Unit-specific > Department-specific > Company-wide Default
-  const query = {
-    org_id: toObjId(user.orgId),
-    company_id: toObjId(user.companyId),
+exports.getEffectivePolicy = async (employee, user, query = {}) => {
+  const { orgId, companyId } = resolvePolicyScope(user, query);
+  const employeeUser = employee.userId
+    ? await User.findById(employee.userId).select("roleId").lean()
+    : null;
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const applicability = [
+    { unit_id: toObjId(employee.unit_id) },
+    { isDefault: true, unit_id: null },
+    {
+      unit_id: null,
+      "applicableFor.departments": { $size: 0 },
+      "applicableFor.designations": { $size: 0 },
+      "applicableFor.roles": { $size: 0 },
+      "applicableFor.employeeTypes": { $size: 0 },
+    },
+  ];
+
+  if (employee.departmentId) {
+    applicability.push({ "applicableFor.departments": toObjId(employee.departmentId) });
+  }
+  if (employee.designationId) {
+    applicability.push({ "applicableFor.designations": toObjId(employee.designationId) });
+  }
+  if (employee.employmentType) {
+    applicability.push({ "applicableFor.employeeTypes": employee.employmentType.toLowerCase() });
+  }
+  if (employeeUser?.roleId) {
+    applicability.push({ "applicableFor.roles": toObjId(employeeUser.roleId) });
+  }
+
+  // Priority: Unit-specific > employee-specific applicability > company-wide.
+  const policyQuery = {
+    org_id: orgId,
+    company_id: companyId,
     enabled: true,
     status: "active",
     isDeleted: false,
-    $or: [
-      // Unit-specific
-      { unit_id: toObjId(employee.unit_id) },
-      // Department-specific
-      { "applicableFor.departments": toObjId(employee.departmentId) },
-      // Designation-specific
-      { "applicableFor.designations": toObjId(employee.designationId) },
-      // Company-wide default
-      { isDefault: true, unit_id: null },
-      // No applicability (applies to all)
-      { unit_id: null, "applicableFor.departments": { $size: 0 }, "applicableFor.designations": { $size: 0 } },
+    $and: [
+      { $or: [{ effectiveFrom: null }, { effectiveFrom: { $lte: today } }] },
+      { $or: [{ effectiveTill: null }, { effectiveTill: { $gte: today } }] },
     ],
+    $or: applicability,
   };
 
-  const policies = await RegularisationPolicy.find(query)
+  const policies = await RegularisationPolicy.find(policyQuery)
     .sort({ isDefault: 1, unit_id: -1 }) // Prefer specific over default
     .limit(1)
     .lean();
@@ -365,6 +442,10 @@ exports.getEffectivePolicy = async (employee, user) => {
 // ─── VALIDATE REGULARISATION REQUEST AGAINST POLICY ──────────────
 exports.validateRequestAgainstPolicy = async (policy, requestData, monthlyCount) => {
   const errors = [];
+
+  if (!policy) {
+    return { valid: false, errors: ["No active regularisation policy applies to this employee"] };
+  }
 
   // Check if regularisation type is allowed
   if (!policy.allowedFor.includes(requestData.type)) {
@@ -378,6 +459,7 @@ exports.validateRequestAgainstPolicy = async (policy, requestData, monthlyCount)
 
   // Check request window
   const requestDate = new Date(requestData.date);
+  requestDate.setUTCHours(0, 0, 0, 0);
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
 

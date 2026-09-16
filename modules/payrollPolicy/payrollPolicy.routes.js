@@ -5,7 +5,7 @@ const { authenticate }   = require("../../middlewares/auth.middleware");
 const checkPermission    = require("../../middlewares/permission.middleware");
 const checkTrial         = require("../../middlewares/checkTrial.middleware");
 const validate           = require("../../middlewares/validate.middleware");
-const { createPolicySchema, updatePolicySchema } = require("./payrollPolicy.validation");
+const { createPolicySchema, updatePolicySchema, getPoliciesSchema } = require("./payrollPolicy.validation");
 const ctrl               = require("./payrollPolicy.controller");
 const runCtrl            = require("./payrollRun.controller");
 const historyCtrl        = require("./payrollHistory.controller");
@@ -19,9 +19,14 @@ router.get("/meta/pt-states", ctrl.getPTStates);
 // ── Payroll History (aggregated by month) ─────────────────────────────────────
 router.get("/history", checkPermission("payrollpolicy.read"), historyCtrl.getPayrollHistory);
 
+// ── Payroll Run ───────────────────────────────────────────────────────
+// Static routes must be registered before /:id routes.
+router.post("/run",              checkPermission("payroll.run"), runCtrl.runForTenant);
+router.post("/run/:employeeId",  checkPermission("payroll.run"), runCtrl.runForEmployee);
+
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 router.post(  "/",    checkPermission("payrollpolicy.create"),   validate(createPolicySchema), ctrl.createPolicy);
-router.get(   "/",    checkPermission("payrollpolicy.read"),                                 ctrl.getPolicies);
+router.get(   "/",    checkPermission("payrollpolicy.read"),     validate(getPoliciesSchema, "query"), ctrl.getPolicies);
 router.get(   "/:id", checkPermission("payrollpolicy.read"),                                 ctrl.getPolicyById);
 router.put(   "/:id", checkPermission("payrollpolicy.update"),   validate(updatePolicySchema), ctrl.updatePolicy);
 router.delete("/:id", checkPermission("payrollpolicy.delete"),                               ctrl.deletePolicy);
@@ -35,9 +40,5 @@ router.post("/:id/restore/:version", checkPermission("payrollpolicy.update"), ct
 router.patch("/:id/activate",   checkPermission("payrollpolicy.update"), ctrl.activatePolicy);
 router.patch("/:id/deactivate", checkPermission("payrollpolicy.update"), ctrl.deactivatePolicy);
 router.patch("/:id/archive",    checkPermission("payrollpolicy.update"), ctrl.archivePolicy);
-
-// ── Payroll Run ───────────────────────────────────────────────────────
-router.post("/run",              checkPermission("payroll.run"), runCtrl.runForTenant);
-router.post("/run/:employeeId",  checkPermission("payroll.run"), runCtrl.runForEmployee);
 
 module.exports = router;

@@ -74,8 +74,11 @@ const leaveTypeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Unique code per company
-leaveTypeSchema.index({ company_id: 1, code: 1 }, { unique: true });
+// Unique active code per organization/company; deleted codes can be recreated.
+leaveTypeSchema.index(
+  { org_id: 1, company_id: 1, code: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } }
+);
 leaveTypeSchema.index({ company_id: 1, isDeleted: 1, isActive: 1 });
 
 module.exports = mongoose.model("LeaveType", leaveTypeSchema);

@@ -8,6 +8,15 @@ const mongoose          = require("mongoose");
 
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
+const buildLockScope = (org_id, company_id, unit_id) => {
+  const scope = {
+    org_id: toObjId(org_id),
+    company_id: toObjId(company_id),
+    unit_id: unit_id ? toObjId(unit_id) : null,
+  };
+  return scope;
+};
+
 // ─── Helper: parse month string ──────────────────────────────
 // "2026-06" → { month: 6, year: 2026, period: "Jun 2026" }
 const parseMonth = (monthStr) => {
@@ -22,10 +31,12 @@ const parseMonth = (monthStr) => {
 };
 
 // ─── CHECK if period is locked ────────────────────────────────
-exports.isPeriodLocked = async (month, year, org_id, unit_id) => {
+exports.isPeriodLocked = async (month, year, org_id, unit_id, company_id) => {
+  const scope = buildLockScope(org_id, company_id, unit_id);
+  if (unit_id) scope.unit_id = { $in: [toObjId(unit_id), null] };
+
   const lock = await PayrollPeriodLock.findOne({
-    org_id:   toObjId(org_id),
-    unit_id:  toObjId(unit_id),
+    ...scope,
     month,
     year,
     isLocked: true,
@@ -40,8 +51,7 @@ exports.lockPeriod = async (payload, user) => {
 
   // Check already locked
   const existing = await PayrollPeriodLock.findOne({
-    org_id:   toObjId(user.orgId),
-    unit_id:  toObjId(user.unitId),
+    ...buildLockScope(user.orgId, user.companyId, user.unitId),
     month,
     year,
   });
@@ -52,8 +62,7 @@ exports.lockPeriod = async (payload, user) => {
 
   // Get payslip stats
   const payslips = await Payslip.find({
-    org_id:   toObjId(user.orgId),
-    unit_id:  toObjId(user.unitId),
+    ...buildLockScope(user.orgId, user.companyId, user.unitId),
     month,
     year,
     isDeleted: false,
@@ -80,7 +89,7 @@ exports.lockPeriod = async (payload, user) => {
   const lock = await PayrollPeriodLock.create({
     org_id:          toObjId(user.orgId),
     company_id:      toObjId(user.companyId),
-    unit_id:         toObjId(user.unitId),
+    unit_id:         user.unitId ? toObjId(user.unitId) : null,
     month,
     year,
     period,
@@ -106,8 +115,7 @@ exports.unlockPeriod = async (payload, user) => {
   const { month, year, period } = parseMonth(monthStr);
 
   const lock = await PayrollPeriodLock.findOne({
-    org_id:  toObjId(user.orgId),
-    unit_id: toObjId(user.unitId),
+    ...buildLockScope(user.orgId, user.companyId, user.unitId),
     month,
     year,
   });
@@ -131,8 +139,7 @@ exports.getLockStatus = async (monthStr, user) => {
   const { month, year, period } = parseMonth(monthStr);
 
   const lock = await PayrollPeriodLock.findOne({
-    org_id:  toObjId(user.orgId),
-    unit_id: toObjId(user.unitId),
+    ...buildLockScope(user.orgId, user.companyId, user.unitId),
     month,
     year,
   })
@@ -152,8 +159,7 @@ exports.getAllLocks = async (query, user) => {
   const { year, page = 1, limit = 12 } = query;
 
   const filter = {
-    org_id:  toObjId(user.orgId),
-    unit_id: toObjId(user.unitId),
+    ...buildLockScope(user.orgId, user.companyId, user.unitId),
   };
   if (year) filter.year = Number(year);
 

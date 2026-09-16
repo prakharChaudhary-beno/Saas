@@ -17,9 +17,6 @@ exports.downloadPayslipPdf = async (req, res, next) => {
 
   } catch (error) {
     console.error('PDF generation error:', error)
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to generate payslip PDF'
-    })
+    next(error)
   }
 }

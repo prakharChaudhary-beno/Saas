@@ -7,10 +7,12 @@ const Employee                 = require("../employee/models/employee.model");
 const User                     = require("../auth/models/user.model");
 const AppError                 = require("../../utils/appError");
 const mongoose                 = require("mongoose");
-const CompanyConfig = require("../companyConfig/models/companyConfig.model");
 const Notification  = require("../notification/notification.model");
 const LeaveBalance = require("../leave/models/leaveBalance.models");
 const LeaveRequest = require("../leave/models/leaveRequest.models");
+const regularisationPolicyService = require("./regularisationPolicy.service");
+const { resolveAttendancePolicy } = require("../../utils/policyResolver");
+const { calculatePolicyOvertime } = require("./overtimeCalculator");
 
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
@@ -100,10 +102,15 @@ const recalculateAttendance = async (request, approvedBy) => {
 
   // Recalculate workingHours
   if (attendance.checkIn && attendance.checkOut) {
+    const attendancePolicy = await resolveAttendancePolicy(
+      request.employeeId.toString(),
+      request.company_id.toString(),
+      request.unit_id?.toString() || null
+    );
     const diffMs = new Date(attendance.checkOut) - new Date(attendance.checkIn);
     attendance.workingHours = parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2));
     const extra = attendance.workingHours - (attendance.standardHours || 8);
-    attendance.overtimeHours = extra > 0 ? parseFloat(extra.toFixed(2)) : 0;
+    attendance.overtimeHours = calculatePolicyOvertime(extra, attendancePolicy.overtime);
 
     // Status based on hours
     if (attendance.workingHours >= (attendance.standardHours || 8)) {
@@ -259,6 +266,7 @@ exports.applyRegularization = async (payload, user) => {
     employee = await Employee.findOne({
       _id:       toObjId(targetEmployeeId),
       org_id:    toObjId(user.orgId),
+      ...(user.companyId ? { company_id: toObjId(user.companyId) } : {}),
       isDeleted: false,
     }).lean();
     if (!employee) throw new AppError("Target employee not found", 404);
@@ -282,84 +290,45 @@ exports.applyRegularization = async (payload, user) => {
     if (!employee) throw new AppError("Employee record not found — please ensure your employee profile is linked", 404);
   }
 
-  // ─── FETCH EFFECTIVE POLICY ─────────────────────────────────────
-  const RegularisationPolicy = require("./models/regularisationPolicy.model");
-  
-  // Fallback to company config if no policy
-  const policy = await RegularisationPolicy.findOne({
+  const employeeUserId = employee.userId || (!isOnBehalf ? user.userId : null);
+  if (!employeeUserId) throw new AppError("Employee user account is not linked", 400);
+  const scopedUser = {
+    ...user,
+    companyId: employee.company_id,
+    unitId: employee.unit_id,
+  };
+
+  // ─── FETCH AND ENFORCE EFFECTIVE POLICY ─────────────────────────
+  const policy = await regularisationPolicyService.getEffectivePolicy(employee, scopedUser);
+  const policyType = regularisationPolicyService.getPolicyTypeForRegularization(policy, regularizationType);
+  if (!policyType) {
+    throw new AppError(`Correction type '${regularizationType}' is not allowed by the active policy`, 400);
+  }
+
+  const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  const monthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1));
+  const monthlyCount = await AttendanceRegularization.countDocuments({
+    employeeId: employee._id,
     org_id: toObjId(user.orgId),
-    company_id: toObjId(user.companyId),
-    enabled: true,
-    status: "active",
+    createdAt: { $gte: monthStart, $lt: monthEnd },
+    status: { $nin: ["REJECTED", "CANCELLED"] },
     isDeleted: false,
-    $or: [
-      { unit_id: employee.unit_id },
-      { unit_id: null },
-    ],
-  }).sort({ unit_id: -1 }).lean();
+  });
+  const validation = await regularisationPolicyService.validateRequestAgainstPolicy(
+    policy,
+    { type: policyType, date: reqDate, attachments },
+    monthlyCount
+  );
+  if (!validation.valid) throw new AppError(validation.errors.join("; "), 400);
 
-  // Fallback to company config if no policy found
-  const config = policy ? null : await CompanyConfig.findOne({ company_id: toObjId(user.companyId) })
-    .select("regularisationApprovalFlow regularisationWindowDays").lean();
-
-  const windowDays = policy?.requestWindow?.pastDaysAllowed || config?.regularisationWindowDays || 30;
-  const approvalFlow = policy?.approvalFlow || config?.regularisationApprovalFlow || "L2_ONLY";
-  const allowFuture = policy?.requestWindow?.futureAllowed || false;
-
-  // Future date check
-  if (!allowFuture && reqDate > today) {
-    throw new AppError("Cannot regularize a future date", 400);
-  }
-
-  // Window check
-  const diffDays = (today - reqDate) / (1000 * 60 * 60 * 24);
-  if (diffDays > windowDays) {
-    throw new AppError(`Cannot regularize attendance older than ${windowDays} days`, 400);
-  }
-
-  // ─── VALIDATE AGAINST POLICY ─────────────────────────────────────
-  if (policy) {
-    // Check if regularisation type is allowed
-    const typeMap = {
-      "MISSED_PUNCH_IN": "missed_punch",
-      "MISSED_PUNCH_OUT": "missed_punch",
-      "BOTH_MISSED": "missed_punch",
-      "WRONG_TIME": "late",
-      "WFH_CORRECTION": "absent",
-      "STATUS_CORRECTION": "absent",
-    };
-    
-    const reqType = typeMap[regularizationType] || "absent";
-    
-    if (!policy.allowedFor.includes(reqType)) {
-      throw new AppError(`Regularisation for '${reqType}' is not permitted under current policy`, 400);
-    }
-
-    // Check monthly quota
-    if (policy.maxRequestsPerMonth) {
-      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-      const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59);
-      
-      const monthlyCount = await AttendanceRegularization.countDocuments({
-        employeeId: employee._id,
-        org_id: toObjId(user.orgId),
-        createdAt: { $gte: monthStart, $lte: monthEnd },
-        status: { $nin: ["REJECTED", "CANCELLED"] },
-        isDeleted: false,
-      });
-
-      if (monthlyCount >= policy.maxRequestsPerMonth) {
-        throw new AppError(`Monthly regularisation limit (${policy.maxRequestsPerMonth}) reached`, 400);
-      }
-    }
-
-    // Check document requirement
-    if (policy.documentRequired?.enabled && policy.documentRequired?.forTypes?.includes(reqType)) {
-      if (!attachments || attachments.length === 0) {
-        throw new AppError(`Document is mandatory for '${reqType}' regularisation`, 400);
-      }
-    }
-  }
+  const approvalFlow = policy.approvalFlow;
+  const autoApproval = approvalFlow === "AUTO"
+    ? { autoApprove: true, reason: "Policy uses automatic approval" }
+    : regularisationPolicyService.checkAutoApproval(
+        policy,
+        { type: policyType },
+        monthlyCount
+      );
 
   // Duplicate check
   const existing = await AttendanceRegularization.findOne({
@@ -381,18 +350,18 @@ exports.applyRegularization = async (payload, user) => {
   // Approvers resolve
   const { l1ApproverId, l2ApproverId } = await resolveRegularizationApprovers(
     employee,
-    user,
+    scopedUser,
     approvalFlow
   );
 
   const request = await AttendanceRegularization.create({
     org_id:            toObjId(user.orgId),
-    company_id:        toObjId(user.companyId),
-    unit_id:           toObjId(user.unitId),
+    company_id:        toObjId(employee.company_id),
+    unit_id:           toObjId(employee.unit_id),
     raisedOnBehalf:    isOnBehalf,
     raisedBy:          toObjId(user.userId),
     employeeId:        employee._id,
-    userId:            toObjId(user.userId),
+    userId:            toObjId(employeeUserId),
     attendanceId:      attendance?._id || null,
     date:              reqDate,
     approvalFlow,
@@ -410,8 +379,27 @@ exports.applyRegularization = async (payload, user) => {
     createdBy: toObjId(user.userId),
   });
 
+  if (autoApproval.autoApprove) {
+    request.approvalHistory.push({
+      level: 0,
+      actorId: toObjId(user.userId),
+      actorName: user.name || "Policy Engine",
+      actorRole: user.role,
+      action: "APPROVED",
+      comment: autoApproval.reason,
+      actionAt: new Date(),
+    });
+    await recalculateAttendance(request, user.userId);
+    await triggerPayrollRecalculation(request, user.userId);
+    request.isApplied = true;
+    request.appliedAt = new Date();
+    request.appliedBy = toObjId(user.userId);
+    request.status = "APPLIED";
+    await request.save();
+  }
+
   // N-05 — Approver ko notification
-  const notifyUserId = l1ApproverId || l2ApproverId;
+  const notifyUserId = autoApproval.autoApprove ? null : l1ApproverId || l2ApproverId;
   if (notifyUserId) {
     Notification.create({
       org_id:  toObjId(user.orgId),

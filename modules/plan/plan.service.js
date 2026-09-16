@@ -11,7 +11,7 @@ const Module       = require("../module/models/module.model");
 // ─────────────────────────────────────────────────────────────
 
 // GET /plans/public
-exports.getPublicPlans = async () => {
+exports.getPublicPlans = async (user) => {
   const plans = await Plan.find({
     status:     "Active",
     is_public:  true,
@@ -20,17 +20,56 @@ exports.getPublicPlans = async () => {
     .populate("modules", "name slug description")
     .sort({ price_monthly: 1 });
 
-  return plans.map(plan => ({
-    _id:             plan._id,
-    name:            plan.name,
-    package_type:    plan.package_type,
-    structure_level: plan.structure_level,
-    price_monthly:   plan.price_monthly,
-    price_annual:    plan.price_annual,
-    seat_limit:      plan.seat_limit,
-    modules:         plan.modules,
-    is_custom:       plan.is_custom,
-  }));
+  let currentPlanId = null;
+  let currentSubscription = null;
+
+  // If user is authenticated, get current subscription
+  if (user?.orgId) {
+    const subscription = await Subscription.findOne({
+      org_id: user.orgId,
+      is_active: true,
+      status: { $in: ["Active", "Trial", "PastDue"] }
+    }).lean();
+
+    if (subscription) {
+      currentPlanId = subscription.plan_id?.toString();
+      currentSubscription = {
+        planId: subscription.plan_id,
+        planName: subscription.plan_snapshot?.name,
+        status: subscription.status,
+        billing_cycle: subscription.billing_cycle,
+        trial_end: subscription.trial_ends_at,
+        next_billing: subscription.ends_at,
+        seats_used: subscription.seats_purchased,
+        seat_limit: subscription.plan_snapshot?.seat_limit,
+        package_type: subscription.plan_snapshot?.package_type,
+        starts_at: subscription.starts_at,
+        ends_at: subscription.ends_at,
+      };
+    }
+  }
+
+  const formattedPlans = plans.map(plan => {
+    const isCurrentPlan = currentPlanId && plan._id.toString() === currentPlanId;
+    
+    return {
+      _id:             plan._id,
+      name:            plan.name,
+      package_type:    plan.package_type,
+      structure_level: plan.structure_level,
+      price_monthly:   plan.price_monthly,
+      price_annual:    plan.price_annual,
+      seat_limit:      plan.seat_limit,
+      modules:         plan.modules,
+      is_custom:       plan.is_custom,
+      is_current_plan: isCurrentPlan,
+    };
+  });
+
+  return {
+    plans: formattedPlans,
+    currentSubscription,
+  };
 };
 
 // GET /plans/:id/public
@@ -181,6 +220,61 @@ exports.deletePlan = async (planId) => {
 
   return { message: "Plan deprecated successfully" };
 };
+// GET /plans/my-plan
+// Get current subscription with full plan details
+exports.getMyPlan = async (user) => {
+  if (!user?.orgId) {
+    throw new AppError("Organization ID not found", 400);
+  }
+
+  const subscription = await Subscription.findOne({
+    org_id: user.orgId,
+    is_active: true,
+    status: { $in: ["Active", "Trial", "PastDue"] }
+  })
+    .populate("plan_id", "name package_type structure_level price_monthly price_annual seat_limit")
+    .lean();
+
+  if (!subscription) {
+    throw new AppError("No active subscription found", 404);
+  }
+
+  // Get module details for the modules in plan_snapshot
+  const Module = require("../module/models/module.model");
+  const moduleIds = subscription.plan_snapshot?.modules || [];
+  
+  let modules = [];
+  if (moduleIds.length > 0) {
+    modules = await Module.find({ _id: { $in: moduleIds } })
+      .select("name slug description")
+      .lean();
+  }
+
+  return {
+    subscription: {
+      _id: subscription._id,
+      status: subscription.status,
+      billing_cycle: subscription.billing_cycle,
+      starts_at: subscription.starts_at,
+      ends_at: subscription.ends_at,
+      trial_end: subscription.trial_ends_at,
+      grace_ends_at: subscription.grace_ends_at,
+      seats_purchased: subscription.seats_purchased,
+    },
+    plan: {
+      _id: subscription.plan_id?._id,
+      name: subscription.plan_snapshot?.name || subscription.plan_id?.name,
+      package_type: subscription.plan_snapshot?.package_type,
+      structure_level: subscription.plan_snapshot?.structure_level,
+      price_monthly: subscription.plan_snapshot?.price_monthly,
+      price_annual: subscription.plan_snapshot?.price_annual,
+      seat_limit: subscription.plan_snapshot?.seat_limit,
+      modules: modules,
+      features: subscription.plan_snapshot?.features || [],
+    },
+  };
+};
+
 // ─────────────────────────────────────────────────────────────
 // GET MY FEATURES
 // GET /plans/my-features

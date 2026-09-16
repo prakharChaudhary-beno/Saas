@@ -2,6 +2,8 @@
 // UPDATED — tenantId → company_id
 
 const CompanyConfig = require("./models/companyConfig.model");
+const Company       = require("../company/models/company.model");
+const Unit          = require("../unit/models/unit.model");
 const AppError      = require("../../utils/appError");
 
 const isValidTimezone = (tz) => {
@@ -9,11 +11,52 @@ const isValidTimezone = (tz) => {
   catch { return false; }
 };
 
-exports.getConfig = async (user) => {
-  return await CompanyConfig.findOne({ company_id: user.companyId });
+const resolveScope = async (user, query = {}) => {
+  const requestedOrgId = query.orgId;
+  const requestedCompanyId = query.companyId;
+  const requestedUnitId = query.unit_id;
+
+  if (user.role !== "SUPER_ADMIN" && requestedOrgId && String(requestedOrgId) !== String(user.orgId)) {
+    throw new AppError("Organization access denied", 403);
+  }
+  if (user.companyId && requestedCompanyId && String(requestedCompanyId) !== String(user.companyId)) {
+    throw new AppError("Company access denied", 403);
+  }
+  if (user.unitId && requestedUnitId && String(requestedUnitId) !== String(user.unitId)) {
+    throw new AppError("Unit access denied", 403);
+  }
+
+  const orgId = user.role === "SUPER_ADMIN" ? requestedOrgId : user.orgId;
+  const companyId = user.companyId || requestedCompanyId;
+  const unitId = user.unitId || requestedUnitId;
+
+  if (!orgId) throw new AppError("orgId is required", 400);
+  if (!companyId) throw new AppError("companyId is required", 400);
+
+  const companyExists = await Company.exists({ _id: companyId, org_id: orgId, is_deleted: false });
+  if (!companyExists) throw new AppError("Company not found in selected organization", 404);
+
+  if (unitId) {
+    const unitExists = await Unit.exists({
+      _id: unitId,
+      org_id: orgId,
+      company_id: companyId,
+      is_deleted: false,
+    });
+    if (!unitExists) throw new AppError("Unit not found in selected organization and company", 404);
+  }
+
+  return { orgId, companyId };
 };
 
-exports.upsertConfig = async (body, user) => {
+exports.getConfig = async (user, query = {}) => {
+  const { orgId, companyId } = await resolveScope(user, query);
+  return await CompanyConfig.findOne({ org_id: orgId, company_id: companyId });
+};
+
+exports.upsertConfig = async (body, user, query = {}) => {
+  const { orgId, companyId } = await resolveScope(user, query);
+
   if (body.timezone && !isValidTimezone(body.timezone)) {
     throw new AppError("Invalid IANA timezone. Example: Asia/Kolkata, America/New_York", 400);
   }
@@ -25,11 +68,11 @@ exports.upsertConfig = async (body, user) => {
   if (body.currency) body.currency = body.currency.toUpperCase();
 
   const config = await CompanyConfig.findOneAndUpdate(
-    { company_id: user.companyId },
+    { org_id: orgId, company_id: companyId },
     {
       ...body,
-      org_id:    user.orgId,
-      company_id: user.companyId,
+      org_id: orgId,
+      company_id: companyId,
       updatedBy: user.userId,
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }

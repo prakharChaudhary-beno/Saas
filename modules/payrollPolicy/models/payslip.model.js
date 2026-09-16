@@ -38,6 +38,12 @@ const deductionsSchema = new mongoose.Schema({
   other:           { type: Number, default: 0 },
 }, { _id: false });
 
+const employerContributionsSchema = new mongoose.Schema({
+  pf:       { type: Number, default: 0 },
+  esi:      { type: Number, default: 0 },
+  gratuity: { type: Number, default: 0 },
+}, { _id: false });
+
 const payslipSchema = new mongoose.Schema({
   // ── Scope ──────────────────────────────────────────────────
   org_id: {
@@ -71,6 +77,7 @@ const payslipSchema = new mongoose.Schema({
   // ── Salary components ──────────────────────────────────────
   earnings:   { type: earningsSchema, default: () => ({}) },
   deductions: { type: deductionsSchema, default: () => ({}) },
+  employerContributions: { type: employerContributionsSchema, default: () => ({}) },
 
   grossSalary: { type: Number, required: true, min: 0 },
   grossAfterLOP:  { type: Number, default: 0, min: 0 },       // post-LOP, before tax/PF
@@ -79,6 +86,7 @@ const payslipSchema = new mongoose.Schema({
 
   // ── Attendance summary (for LOP) ───────────────────────────
   totalWorkingDays:  { type: Number, default: 0 },
+  eligibleWorkingDays: { type: Number, default: 0 },
   daysPresent:       { type: Number, default: 0 },
   lopDays:           { type: Number, default: 0 },
   overtimeHours:     { type: Number, default: 0 },

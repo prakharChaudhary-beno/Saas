@@ -759,6 +759,14 @@ exports.verifyDocument = async (employeeId, docId, user) => {
 
 // ─── E-08: GET MY PROFILE ─────────────────────────────────────
 exports.getMyProfile = async (user) => {
+  // Validate user has required org scope
+  if (!user.userId) {
+    throw new AppError("User ID not found in token", 401);
+  }
+  if (!user.orgId) {
+    throw new AppError("Organization ID not found. Please login again.", 401);
+  }
+
   const employee = await Employee.findOne({
     userId:    user.userId,
     org_id:    user.orgId,

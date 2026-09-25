@@ -217,7 +217,7 @@ const readOnlySlugs = allSlugs.filter(
           "payroll.create", "payroll.read", "payroll.run",
           "department.read",
           "designation.read",
-          "holiday.read",
+          "holiday.create", "holiday.read", "holiday.update", "holiday.delete",
           "biometric.read", "biometric.create", "biometric.update",
           "investment_declaration.read", "investment_declaration.create", "investment_declaration.update",  // HR can review and approve
         ]),

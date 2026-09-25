@@ -48,12 +48,13 @@
 // module.exports = connectDB;
 
 const mongoose = require('mongoose');
-const { seedRoles }       = require('../seeders/roleSeeder');
-const { seedPermissions } = require('../seeders/permission.Seeder');
-const { seedModules }     = require('../seeders/module.Seeders');
-const { seedPlans }       = require('../seeders/plan.Seeder');
-const { seedHolidays }    = require('../seeders/holiday.Seeders');
-const migrateLeaveTypeIndexes = require('../modules/leave/migrations/migrateLeaveTypeIndexes');
+// Seeder imports removed — seeding should only run manually via scripts/seed.js
+// const { seedRoles }       = require('../seeders/roleSeeder');
+// const { seedPermissions } = require('../seeders/permission.Seeder');
+// const { seedModules }     = require('../seeders/module.Seeders');
+// const { seedPlans }       = require('../seeders/plan.Seeder');
+// const { seedHolidays }    = require('../seeders/holiday.Seeders');
+// const migrateLeaveTypeIndexes = require('../modules/leave/migrations/migrateLeaveTypeIndexes');
 
 // ── Serverless-safe connection caching ──────────────────────────
 // Vercel spins up fresh function instances per request/cold-start.
@@ -109,16 +110,18 @@ const connectDB = async () => {
     });
   }
 
-  // ── Seeders — run once per warm instance, not on every request ──
-  if (!cached.seeded) {
-    cached.seeded = true;
-    await seedModules();
-    await seedPlans();
-    await seedPermissions();
-    await seedRoles();
-    await seedHolidays();
-    await migrateLeaveTypeIndexes();
-  }
+  // ── Seeders removed — run manually via scripts/seed.js ───────────
+  // Seeding no longer runs automatically on server start to preserve
+  // dashboard permission changes. Use: npm run seed
+  // if (!cached.seeded) {
+  //   cached.seeded = true;
+  //   await seedModules();
+  //   await seedPlans();
+  //   await seedPermissions();
+  //   await seedRoles();
+  //   await seedHolidays();
+  //   await migrateLeaveTypeIndexes();
+  // }
 
   return cached.conn;
 };

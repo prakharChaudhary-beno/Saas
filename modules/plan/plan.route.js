@@ -9,7 +9,7 @@ const { authorizeRoles } = require("../../middlewares/role.middleware");
 // ── Public routes — auth optional (for current plan info) ────────────────────
 // Used on pricing page and during registration
 // If authenticated, includes current subscription info
-router.get("/public",     authenticate, controller.getPublicPlans);
+router.get("/public",     controller.getPublicPlans);
 router.get("/:id/public", controller.getPlanById);
 
 // ── Authenticated — current user ka plan features ─────────────

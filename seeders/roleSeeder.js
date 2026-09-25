@@ -217,7 +217,7 @@ const readOnlySlugs = allSlugs.filter(
           "payroll.create", "payroll.read", "payroll.run",
           "department.read",
           "designation.read",
-          "holiday.read",
+          "holiday.create", "holiday.read", "holiday.update", "holiday.delete",
           "biometric.read", "biometric.create", "biometric.update",
           "investment_declaration.read", "investment_declaration.create", "investment_declaration.update",  // HR can review and approve
         ]),
@@ -274,20 +274,35 @@ const readOnlySlugs = allSlugs.filter(
     ];
 
     // ── Upsert — safe to run multiple times ───────────────────
+    // CRITICAL: Use $setOnInsert for permissions to preserve dashboard changes
+    // Only $set immutable/metadata fields that should always be updated
     let inserted = 0;
     let skipped  = 0;
 
     for (const role of roles) {
       const result = await Role.updateOne(
         { slug: role.slug, org_id: null },
-        { $set: role },
+        {
+          $setOnInsert: { 
+            permissions: role.permissions  // Only set on FIRST creation, never overwrite
+          },
+          $set: {
+            name:        role.name,
+            level:       role.level,
+            userClass:   role.userClass,
+            modules:     role.modules,
+            description: role.description,
+            isSystem:    role.isSystem,
+            unit_id:     role.unit_id,
+          }
+        },
         { upsert: true }
       );
       if (result.upsertedCount > 0) inserted++;
       else skipped++;
     }
 
-    console.log(`✅ Roles seeded — ${inserted} inserted, ${skipped} already existed`);
+    console.log(`✅ Roles seeded — ${inserted} inserted, ${skipped} already existed (permissions preserved)`);
 
   } catch (error) {
     console.error("❌ Role seeder failed:", error.message);

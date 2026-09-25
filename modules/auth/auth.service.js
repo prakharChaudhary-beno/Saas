@@ -331,6 +331,7 @@ exports.getMe = async (user) => {
   return {
     user: {
       id:              currentUser._id,
+      employeeId:      employee?._id || null,  // Employee document ID for profile navigation
       name:            currentUser.name,
       email:           currentUser.email,
       phone:           currentUser.phone,

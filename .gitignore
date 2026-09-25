@@ -32,3 +32,4 @@ build/
 # PM2
 pids/
 *.pid
+check-permissions.js
